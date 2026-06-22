@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
     "build": "vite build",
+    "build:wallpaper": "vite build --base ./ --outDir dist-wallpaper --emptyOutDir false && node scripts/prepare-wallpaper.mjs",
     "start": "node local-server.mjs",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",

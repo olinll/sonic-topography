@@ -293,6 +293,10 @@ export function MapScene({ theme = 'nocturnal' }: { theme?: string }) {
         autoRotate 
         autoRotateSpeed={0.5}
         enablePan={false}
+        touches={{
+          ONE: THREE.TOUCH.ROTATE,
+          TWO: THREE.TOUCH.DOLLY_ROTATE,
+        }}
         minDistance={5}
         maxDistance={120}
         maxPolarAngle={Math.PI / 2 - 0.1}

@@ -1,8 +1,9 @@
-import tailwindcss from '@tailwindcss/vite';
+﻿import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import fs from 'node:fs/promises';
 import path from 'path';
 import {defineConfig} from 'vite';
+import { NETEASE_COOKIE_HEADER, normalizeNeteaseCookie } from './src/lib/neteaseCookie';
 
 const neteaseHeaders = {
   Referer: 'https://music.163.com/',
@@ -15,6 +16,7 @@ const playableUrlCacheTtl = 1000 * 60 * 10;
 const searchCacheTtl = 1000 * 60 * 5;
 const dataDir = path.resolve(__dirname, 'data');
 const playlistsPath = path.join(dataDir, 'playlists.json');
+let browserNeteaseCookie = '';
 
 function writeJson(res: any, status: number, data: unknown) {
   res.statusCode = status;
@@ -65,19 +67,72 @@ async function readRequestBody(req: any): Promise<string> {
   });
 }
 
-async function getNeteasePlayableUrl(id: string) {
-  const cached = playableUrlCache.get(id);
+async function getNeteasePlayableUrlWithCookie(id: string, cookie: string) {
+  const normalizedCookie = normalizeNeteaseCookie(cookie);
+  const cacheKey = `${id}::${normalizedCookie}`;
+  const cached = playableUrlCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.url;
 
   const url = `https://music.163.com/api/song/enhance/player/url?id=${encodeURIComponent(id)}&ids=%5B${encodeURIComponent(id)}%5D&br=320000`;
-  const response = await fetch(url, { headers: neteaseHeaders });
+  const response = await fetch(url, { headers: createNeteaseHeaders(normalizedCookie) });
   const data = await response.json() as any;
   const playableUrl = data?.data?.[0]?.url || null;
-  playableUrlCache.set(id, { url: playableUrl, expiresAt: Date.now() + playableUrlCacheTtl });
+  playableUrlCache.set(cacheKey, { url: playableUrl, expiresAt: Date.now() + playableUrlCacheTtl });
   return playableUrl;
 }
 
-async function filterPlayableSongs(rawSongs: any[], resultLimit: number) {
+function mapNeteaseSong(song: any) {
+  const artists = song.artists || song.ar || [];
+  const album = song.album || song.al || {};
+  return {
+    id: song.id,
+    name: song.name,
+    artist: artists.map((artist: any) => artist.name).filter(Boolean).join(' / '),
+    album: album?.name || '',
+    duration: song.duration || song.dt || 0,
+    fee: song.fee,
+  };
+}
+
+function readNeteaseCookie(req: any) {
+  const raw = req.headers?.[NETEASE_COOKIE_HEADER.toLowerCase()];
+  const headerCookie = Array.isArray(raw) ? raw[0] : String(raw || '');
+  return normalizeNeteaseCookie(headerCookie || browserNeteaseCookie);
+}
+
+function createNeteaseHeaders(cookie: string, extraHeaders: Record<string, string> = {}) {
+  const normalizedCookie = normalizeNeteaseCookie(cookie);
+  return {
+    ...neteaseHeaders,
+    ...(normalizedCookie ? { Cookie: normalizedCookie } : {}),
+    ...extraHeaders,
+  };
+}
+
+
+async function validateNeteaseCookie(cookie: string) {
+  const account = await getNeteaseAccount(cookie);
+  return account.valid;
+}
+
+async function getNeteaseAccount(cookie: string) {
+  const normalizedCookie = normalizeNeteaseCookie(cookie);
+  if (!normalizedCookie) return { valid: false, userId: null, nickname: '' };
+
+  const response = await fetch('https://music.163.com/api/nuser/account/get', {
+    headers: createNeteaseHeaders(normalizedCookie),
+  });
+  const data = await response.json() as any;
+  const userId = data?.profile?.userId || data?.account?.id || null;
+  return {
+    valid: Boolean(userId),
+    userId,
+    nickname: data?.profile?.nickname || '',
+  };
+}
+
+
+async function filterPlayableSongs(rawSongs: any[], resultLimit: number, cookie: string) {
   const playableSongs: any[] = [];
   const batchSize = 8;
 
@@ -85,7 +140,7 @@ async function filterPlayableSongs(rawSongs: any[], resultLimit: number) {
     const batch = rawSongs.slice(i, i + batchSize);
     const results = await Promise.all(batch.map(async (song) => ({
       song,
-      playableUrl: await getNeteasePlayableUrl(String(song.id)),
+      playableUrl: await getNeteasePlayableUrlWithCookie(String(song.id), cookie),
     })));
 
     for (const result of results) {
@@ -95,6 +150,48 @@ async function filterPlayableSongs(rawSongs: any[], resultLimit: number) {
   }
 
   return playableSongs;
+}
+
+async function getDailyRecommendSongs(cookie: string, resultLimit: number) {
+  const normalizedCookie = normalizeNeteaseCookie(cookie);
+  if (!normalizedCookie) return { valid: false, songs: [] };
+  const validCookie = await validateNeteaseCookie(normalizedCookie);
+  if (!validCookie) return { valid: false, songs: [] };
+
+  const response = await fetch('https://music.163.com/api/v3/discovery/recommend/songs', {
+    headers: createNeteaseHeaders(normalizedCookie),
+  });
+  const data = await response.json() as any;
+  const rawSongs = (data?.data?.dailySongs || data?.recommend || []).map(mapNeteaseSong);
+  const songs = await filterPlayableSongs(rawSongs, resultLimit, normalizedCookie);
+  return { valid: Boolean(data?.data?.dailySongs || data?.recommend), songs };
+}
+
+async function getUserPlaylists(cookie: string) {
+  const account = await getNeteaseAccount(cookie);
+  if (!account.valid || !account.userId) return { valid: false, playlists: [] };
+
+  const response = await fetch(`https://music.163.com/api/user/playlist?uid=${encodeURIComponent(account.userId)}&limit=100&offset=0`, {
+    headers: createNeteaseHeaders(cookie),
+  });
+  const data = await response.json() as any;
+  const playlists = (data?.playlist || []).map((playlist: any) => ({
+    id: playlist.id,
+    name: playlist.name,
+    trackCount: playlist.trackCount || 0,
+  }));
+
+  return { valid: true, playlists };
+}
+
+async function getPlaylistPlayableSongs(playlistId: string, cookie: string, resultLimit: number) {
+  const response = await fetch(`https://music.163.com/api/v6/playlist/detail?id=${encodeURIComponent(playlistId)}&n=${resultLimit * 2}`, {
+    headers: createNeteaseHeaders(cookie),
+  });
+  const data = await response.json() as any;
+  const tracks = data?.playlist?.tracks || [];
+  const songs = await filterPlayableSongs(tracks.map(mapNeteaseSong), resultLimit, cookie);
+  return songs;
 }
 
 function neteaseApiPlugin() {
@@ -127,15 +224,16 @@ function neteaseApiPlugin() {
         try {
           const requestUrl = new URL(req.url || '', 'http://localhost');
           const keywords = requestUrl.searchParams.get('keywords')?.trim();
-          const requestedLimit = Number(requestUrl.searchParams.get('limit') || '12');
-          const resultLimit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(requestedLimit, 20)) : 12;
+          const requestedLimit = Number(requestUrl.searchParams.get('limit') || '30');
+          const resultLimit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(requestedLimit, 40)) : 30;
+          const cookie = readNeteaseCookie(req);
 
           if (!keywords) {
             writeJson(res, 400, { error: 'Missing keywords' });
             return;
           }
 
-          const cacheKey = `${keywords.toLowerCase()}::${resultLimit}`;
+          const cacheKey = `${keywords.toLowerCase()}::${resultLimit}::${normalizeNeteaseCookie(cookie)}`;
           const cached = searchCache.get(cacheKey);
           if (cached && cached.expiresAt > Date.now()) {
             writeJson(res, 200, { songs: cached.songs, cached: true });
@@ -147,27 +245,19 @@ function neteaseApiPlugin() {
             type: '1',
             offset: '0',
             total: 'true',
-            limit: String(Math.min(resultLimit * 3, 60)),
+            limit: String(Math.min(resultLimit * 5, 120)),
           });
 
           const response = await fetch('https://music.163.com/api/search/get/web', {
             method: 'POST',
-            headers: {
-              ...neteaseHeaders,
+            headers: createNeteaseHeaders(cookie, {
               'Content-Type': 'application/x-www-form-urlencoded',
-            },
+            }),
             body,
           });
           const data = await response.json() as any;
-          const rawSongs = (data?.result?.songs || []).map((song: any) => ({
-            id: song.id,
-            name: song.name,
-            artist: (song.artists || []).map((artist: any) => artist.name).filter(Boolean).join(' / '),
-            album: song.album?.name || '',
-            duration: song.duration || 0,
-            fee: song.fee,
-          }));
-          const songs = await filterPlayableSongs(rawSongs, resultLimit);
+          const rawSongs = (data?.result?.songs || []).map(mapNeteaseSong);
+          const songs = await filterPlayableSongs(rawSongs, resultLimit, cookie);
           searchCache.set(cacheKey, { songs, expiresAt: Date.now() + searchCacheTtl });
 
           writeJson(res, 200, { songs });
@@ -176,10 +266,118 @@ function neteaseApiPlugin() {
         }
       });
 
+      server.middlewares.use('/api/netease/cookie', async (req: any, res: any, next: any) => {
+        try {
+          if (req.method === 'GET') {
+            writeJson(res, 200, { hasCookie: Boolean(browserNeteaseCookie) });
+            return;
+          }
+
+          if (req.method === 'PUT') {
+            const body = await readRequestBody(req);
+            const parsed = body ? JSON.parse(body) : {};
+            browserNeteaseCookie = normalizeNeteaseCookie(parsed.cookie);
+            playableUrlCache.clear();
+            searchCache.clear();
+            const account = await getNeteaseAccount(browserNeteaseCookie);
+            writeJson(res, 200, { hasCookie: Boolean(browserNeteaseCookie), valid: account.valid, userId: account.userId, nickname: account.nickname });
+            return;
+          }
+        } catch (error) {
+          writeJson(res, 500, { error: 'Unable to save Netease cookie' });
+          return;
+        }
+
+        next();
+      });
+
+      server.middlewares.use('/api/netease/liked', async (req: any, res: any) => {
+        try {
+          const requestUrl = new URL(req.url || '', 'http://localhost');
+          const requestedLimit = Number(requestUrl.searchParams.get('limit') || '50');
+          const resultLimit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(requestedLimit, 80)) : 50;
+          const cookie = readNeteaseCookie(req);
+          const userPlaylists = await getUserPlaylists(cookie);
+
+          if (!userPlaylists.valid || userPlaylists.playlists.length === 0) {
+            writeJson(res, 401, { error: 'Netease cookie is invalid or expired', songs: [] });
+            return;
+          }
+
+          const likedPlaylist = userPlaylists.playlists[0];
+          const songs = await getPlaylistPlayableSongs(String(likedPlaylist.id), cookie, resultLimit);
+          writeJson(res, 200, { songs, playlist: likedPlaylist });
+        } catch (error) {
+          writeJson(res, 500, { error: 'Netease liked songs failed' });
+        }
+      });
+
+      server.middlewares.use('/api/netease/playlists', async (req: any, res: any) => {
+        try {
+          const cookie = readNeteaseCookie(req);
+          const userPlaylists = await getUserPlaylists(cookie);
+
+          if (!userPlaylists.valid) {
+            writeJson(res, 401, { error: 'Netease cookie is invalid or expired', playlists: [] });
+            return;
+          }
+
+          writeJson(res, 200, { playlists: userPlaylists.playlists.slice(1) });
+        } catch (error) {
+          writeJson(res, 500, { error: 'Netease playlists failed' });
+        }
+      });
+
+      server.middlewares.use('/api/netease/playlist', async (req: any, res: any) => {
+        try {
+          const requestUrl = new URL(req.url || '', 'http://localhost');
+          const id = requestUrl.searchParams.get('id');
+          const requestedLimit = Number(requestUrl.searchParams.get('limit') || '50');
+          const resultLimit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(requestedLimit, 80)) : 50;
+          const cookie = readNeteaseCookie(req);
+
+          if (!id) {
+            writeJson(res, 400, { error: 'Missing id' });
+            return;
+          }
+
+          const account = await getNeteaseAccount(cookie);
+          if (!account.valid) {
+            writeJson(res, 401, { error: 'Netease cookie is invalid or expired', songs: [] });
+            return;
+          }
+
+          const songs = await getPlaylistPlayableSongs(id, cookie, resultLimit);
+          writeJson(res, 200, { songs });
+        } catch (error) {
+          writeJson(res, 500, { error: 'Netease playlist failed' });
+        }
+      });
+
+      server.middlewares.use('/api/netease/daily-recommend', async (req: any, res: any) => {
+        try {
+          const requestUrl = new URL(req.url || '', 'http://localhost');
+          const requestedLimit = Number(requestUrl.searchParams.get('limit') || '30');
+          const resultLimit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(requestedLimit, 50)) : 30;
+          const cookie = readNeteaseCookie(req);
+          const result = await getDailyRecommendSongs(cookie, resultLimit);
+
+          if (!result.valid) {
+            writeJson(res, 401, { error: 'Netease cookie is invalid or expired', songs: [] });
+            return;
+          }
+
+          writeJson(res, 200, { songs: result.songs });
+        } catch (error) {
+          writeJson(res, 500, { error: 'Netease daily recommend failed' });
+        }
+      });
+
       server.middlewares.use('/api/netease/lyric', async (req: any, res: any) => {
         try {
           const requestUrl = new URL(req.url || '', 'http://localhost');
           const id = requestUrl.searchParams.get('id');
+          const cookie = readNeteaseCookie(req);
 
           if (!id) {
             writeJson(res, 400, { error: 'Missing id' });
@@ -187,7 +385,7 @@ function neteaseApiPlugin() {
           }
 
           const response = await fetch(`https://music.163.com/api/song/lyric?id=${encodeURIComponent(id)}&lv=-1&kv=-1&tv=-1`, {
-            headers: neteaseHeaders,
+            headers: createNeteaseHeaders(cookie),
           });
           const data = await response.json() as any;
           writeJson(res, 200, {
@@ -203,13 +401,14 @@ function neteaseApiPlugin() {
         try {
           const requestUrl = new URL(req.url || '', 'http://localhost');
           const id = requestUrl.searchParams.get('id');
+          const cookie = readNeteaseCookie(req);
 
           if (!id) {
             writeJson(res, 400, { error: 'Missing id' });
             return;
           }
 
-          writeJson(res, 200, { url: await getNeteasePlayableUrl(id) });
+          writeJson(res, 200, { url: await getNeteasePlayableUrlWithCookie(id, cookie) });
         } catch (error) {
           writeJson(res, 500, { error: 'Netease url failed' });
         }
@@ -219,19 +418,20 @@ function neteaseApiPlugin() {
         try {
           const requestUrl = new URL(req.url || '', 'http://localhost');
           const id = requestUrl.searchParams.get('id');
+          const cookie = readNeteaseCookie(req);
 
           if (!id) {
             writeJson(res, 400, { error: 'Missing id' });
             return;
           }
 
-          const playableUrl = await getNeteasePlayableUrl(id);
+          const playableUrl = await getNeteasePlayableUrlWithCookie(id, cookie);
           if (!playableUrl) {
             writeJson(res, 404, { error: 'No playable url for this song' });
             return;
           }
 
-          const headers: Record<string, string> = { ...neteaseHeaders };
+          const headers: Record<string, string> = createNeteaseHeaders(cookie);
           if (req.headers.range) headers.Range = req.headers.range;
 
           const audioResponse = await fetch(playableUrl, { headers });
@@ -274,10 +474,12 @@ export default defineConfig(() => {
     },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
+      // Do not modify芒聙聰file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },
   };
 });
+
+

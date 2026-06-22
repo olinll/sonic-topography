@@ -1,9 +1,19 @@
-import React, { useRef, useState, useEffect } from 'react';
-import { Play, Pause, Volume2, SkipForward, SkipBack, Palette, Plus, ListMusic, Shuffle, Repeat, Trash2 } from 'lucide-react';
+﻿import React, { useRef, useState, useEffect } from 'react';
+import { Play, Pause, Volume2, SkipForward, SkipBack, Palette, Plus, ListMusic, Shuffle, Repeat, Trash2, Menu, X } from 'lucide-react';
 import { engine } from '../../lib/AudioEngine';
 import { themes } from '../../lib/themes';
 import { LyricsDisplay } from './LyricsDisplay';
 import { extractAudioMetadata, extractLyricsFromAudio } from '../../lib/metadata';
+import {
+  createNeteaseCookieHeaders,
+  readNeteaseCookieStorage,
+  writeNeteaseCookieStorage,
+} from '../../lib/neteaseCookie';
+import {
+  readTriggerSettingsStorage,
+  writeTriggerSettingsStorage,
+  type StoredTriggerConfig,
+} from '../../lib/triggerSettings';
 
 interface UIProps {
   theme: string;
@@ -25,12 +35,21 @@ interface SavedPlaylist {
   songs: NeteaseSong[];
 }
 
+interface NeteasePlaylistSummary {
+  id: number;
+  name: string;
+  trackCount: number;
+}
+
 type PlayMode = 'sequence' | 'shuffle';
+type OptionsTab = 'Pulse' | 'Meteor' | 'Cookie';
+type NeteaseCloudTab = 'liked' | 'playlists' | 'daily';
 type PendingDelete =
   | { type: 'song'; playlistId: string; songId: number; label: string }
   | { type: 'playlist'; playlistId: string; label: string };
 
 const PLAYLIST_STORAGE_KEY = 'sonic-topography-playlists-v1';
+const baseUrl = import.meta.env.BASE_URL || '/';
 
 function createDefaultPlaylists(): SavedPlaylist[] {
   return [
@@ -60,10 +79,45 @@ function hasSavedSongs(playlists: SavedPlaylist[]): boolean {
   return playlists.some((playlist) => playlist.songs.length > 0);
 }
 
+function applyStoredTriggerConfig(config: typeof engine.pulseTrigger, stored?: Partial<StoredTriggerConfig>) {
+  if (!stored) return;
+  if (typeof stored.enabled === 'boolean') config.enabled = stored.enabled;
+  if (stored.mode === 'Auto Beat' || stored.mode === 'Advanced') config.mode = stored.mode;
+  if (Number.isFinite(stored.freqIndex)) config.freqIndex = Number(stored.freqIndex);
+  if (Number.isFinite(stored.threshold)) config.threshold = Number(stored.threshold);
+  if (Number.isFinite(stored.sensitivity)) config.sensitivity = Number(stored.sensitivity);
+  if (Number.isFinite(stored.cooldown)) config.cooldown = Number(stored.cooldown);
+  if (Number.isFinite(stored.bandStart)) config.bandStart = Number(stored.bandStart);
+  if (Number.isFinite(stored.bandEnd)) config.bandEnd = Number(stored.bandEnd);
+  if (Number.isFinite(stored.pulseStrength)) config.pulseStrength = Number(stored.pulseStrength);
+}
+
+function snapshotTriggerConfig(config: typeof engine.pulseTrigger): StoredTriggerConfig {
+  return {
+    enabled: config.enabled,
+    mode: config.mode,
+    freqIndex: config.freqIndex,
+    threshold: config.threshold,
+    sensitivity: config.sensitivity,
+    cooldown: config.cooldown,
+    bandStart: config.bandStart,
+    bandEnd: config.bandEnd,
+    pulseStrength: config.pulseStrength,
+  };
+}
+
+function loadStoredTriggerSettings() {
+  const settings = readTriggerSettingsStorage();
+  applyStoredTriggerConfig(engine.pulseTrigger, settings.Pulse);
+  applyStoredTriggerConfig(engine.meteorTrigger, settings.Meteor);
+}
+
+loadStoredTriggerSettings();
+
 export function UI({ theme, onThemeChange }: UIProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const demoAudioUrl = '/demo.mp3';
-  const demoLyricsUrl = '/demo.lrc';
+  const demoAudioUrl = `${baseUrl}demo.mp3`;
+  const demoLyricsUrl = `${baseUrl}demo.lrc`;
   const [isPlaying, setIsPlaying] = useState(false);
   const [trackName, setTrackName] = useState<string>('No track selected');
   const [lyricsText, setLyricsText] = useState<string>('');
@@ -72,12 +126,19 @@ export function UI({ theme, onThemeChange }: UIProps) {
   const [volume, setVolume] = useState(1);
   const [isDragging, setIsDragging] = useState(false);
   const [isCapturing, setIsCapturing] = useState(false);
-  const [showFreqPanel, setShowFreqPanel] = useState(false);
+  const [showOptionsPanel, setShowOptionsPanel] = useState(false);
   const [showSearchPanel, setShowSearchPanel] = useState(false);
+  const [showNeteasePanel, setShowNeteasePanel] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<NeteaseSong[]>([]);
   const [searchStatus, setSearchStatus] = useState('');
   const [isSearching, setIsSearching] = useState(false);
+  const [neteaseCloudTab, setNeteaseCloudTab] = useState<NeteaseCloudTab>('daily');
+  const [neteaseCloudSongs, setNeteaseCloudSongs] = useState<NeteaseSong[]>([]);
+  const [neteaseCloudPlaylists, setNeteaseCloudPlaylists] = useState<NeteasePlaylistSummary[]>([]);
+  const [activeNeteasePlaylistId, setActiveNeteasePlaylistId] = useState<number | null>(null);
+  const [neteaseCloudStatus, setNeteaseCloudStatus] = useState('');
+  const [isLoadingNeteaseCloud, setIsLoadingNeteaseCloud] = useState(false);
   const [showPlaylistPanel, setShowPlaylistPanel] = useState(false);
   const [playlists, setPlaylists] = useState<SavedPlaylist[]>(readSavedPlaylists);
   const [activePlaylistId, setActivePlaylistId] = useState('favorites');
@@ -87,6 +148,10 @@ export function UI({ theme, onThemeChange }: UIProps) {
   const [playQueue, setPlayQueue] = useState<NeteaseSong[]>([]);
   const [currentSongId, setCurrentSongId] = useState<number | null>(null);
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
+  const [neteaseCookie, setNeteaseCookie] = useState(readNeteaseCookieStorage);
+  const [cookieStatus, setCookieStatus] = useState('');
+  const [isNeteaseCookieValid, setIsNeteaseCookieValid] = useState(false);
+  const [isMobileSideNavOpen, setIsMobileSideNavOpen] = useState(false);
   const hasLoadedPlaylistsRef = useRef(false);
 
   useEffect(() => {
@@ -100,6 +165,140 @@ export function UI({ theme, onThemeChange }: UIProps) {
       console.warn('Unable to save playlists to local server:', error);
     });
   }, [playlists]);
+
+  const syncNeteaseCookie = async (cookie: string) => {
+    try {
+      const response = await fetch('/api/netease/cookie', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cookie }),
+      });
+      const data = await response.json();
+      const valid = Boolean(data.valid);
+      setIsNeteaseCookieValid(valid);
+      setCookieStatus(cookie.trim() ? (valid ? 'Cookie 可用，已开启网易云' : 'Cookie 已保存，但校验失败') : 'Cookie 已清除');
+    } catch (error) {
+      console.warn('Unable to sync Netease cookie:', error);
+      setIsNeteaseCookieValid(false);
+      setCookieStatus('已保存到浏览器，但同步到本地代理失败');
+    }
+  };
+
+  useEffect(() => {
+    const savedCookie = readNeteaseCookieStorage();
+    if (savedCookie) syncNeteaseCookie(savedCookie);
+  }, []);
+
+
+  const saveNeteaseCookie = () => {
+    writeNeteaseCookieStorage(neteaseCookie);
+    const normalizedCookie = readNeteaseCookieStorage();
+    setNeteaseCookie(normalizedCookie);
+    syncNeteaseCookie(normalizedCookie);
+  };
+
+  const clearNeteaseCookie = () => {
+    writeNeteaseCookieStorage('');
+    setNeteaseCookie('');
+    setIsNeteaseCookieValid(false);
+    syncNeteaseCookie('');
+  };
+
+  const ensureNeteaseCookieReady = () => {
+    if (!isNeteaseCookieValid) {
+      setNeteaseCloudStatus('璇峰厛鍦ㄨ缃噷淇濆瓨鍙敤鐨勭綉鏄撲簯 Cookie');
+      setShowOptionsPanel(true);
+      return false;
+    }
+
+    return true;
+  };
+
+  const fetchNeteaseSongs = async (url: string, emptyMessage: string) => {
+    if (!ensureNeteaseCookieReady()) return;
+
+    setIsLoadingNeteaseCloud(true);
+    setNeteaseCloudStatus('姝ｅ湪鍔犺浇...');
+
+    try {
+      const response = await fetch(url, {
+        headers: createNeteaseCookieHeaders(neteaseCookie),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        setIsNeteaseCookieValid(false);
+        setNeteaseCloudStatus('网易云 Cookie 失效了，请重新保存');
+        setShowOptionsPanel(true);
+        return;
+      }
+
+      const songs = Array.isArray(data.songs) ? data.songs : [];
+      if (songs.length === 0) {
+        setNeteaseCloudSongs([]);
+        setNeteaseCloudStatus(emptyMessage);
+        return;
+      }
+
+      setNeteaseCloudSongs(songs);
+      setNeteaseCloudStatus('');
+    } catch (error) {
+      console.warn('Unable to load Netease cloud songs:', error);
+      setNeteaseCloudStatus('鍔犺浇澶辫触');
+    } finally {
+      setIsLoadingNeteaseCloud(false);
+    }
+  };
+
+  const loadDailyRecommendations = async () => {
+    setNeteaseCloudTab('daily');
+    setActiveNeteasePlaylistId(null);
+    await fetchNeteaseSongs('/api/netease/daily-recommend?limit=50', '姣忔棩鎺ㄨ崘閲屾殏鏃舵病鏈夊彲鎾斁姝屾洸');
+  };
+
+  const loadLikedSongs = async () => {
+    setNeteaseCloudTab('liked');
+    setActiveNeteasePlaylistId(null);
+    await fetchNeteaseSongs('/api/netease/liked?limit=50', '鍠滄鍒楄〃閲屾殏鏃舵病鏈夊彲鎾斁姝屾洸');
+  };
+
+  const loadNeteasePlaylists = async () => {
+    setNeteaseCloudTab('playlists');
+    setNeteaseCloudSongs([]);
+    setActiveNeteasePlaylistId(null);
+    if (!ensureNeteaseCookieReady()) return;
+
+    setIsLoadingNeteaseCloud(true);
+    setNeteaseCloudStatus('姝ｅ湪鍔犺浇姝屽崟...');
+
+    try {
+      const response = await fetch('/api/netease/playlists', {
+        headers: createNeteaseCookieHeaders(neteaseCookie),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        setIsNeteaseCookieValid(false);
+        setNeteaseCloudStatus('网易云 Cookie 失效了，请重新保存');
+        setShowOptionsPanel(true);
+        return;
+      }
+
+      const cloudPlaylists = Array.isArray(data.playlists) ? data.playlists : [];
+      setNeteaseCloudPlaylists(cloudPlaylists);
+      setNeteaseCloudStatus(cloudPlaylists.length ? '请选择一个歌单' : '没有找到网易云歌单');
+    } catch (error) {
+      console.warn('Unable to load Netease playlists:', error);
+      setNeteaseCloudStatus('姝屽崟鍔犺浇澶辫触');
+    } finally {
+      setIsLoadingNeteaseCloud(false);
+    }
+  };
+
+  const loadNeteasePlaylistSongs = async (playlist: NeteasePlaylistSummary) => {
+    setActiveNeteasePlaylistId(playlist.id);
+    await fetchNeteaseSongs(`/api/netease/playlist?id=${playlist.id}&limit=50`, '杩欎釜姝屽崟閲屾殏鏃舵病鏈夊彲鎾斁姝屾洸');
+  };
 
   useEffect(() => {
     const loadPlaylists = async () => {
@@ -244,7 +443,9 @@ export function UI({ theme, onThemeChange }: UIProps) {
     setSearchResults([]);
 
     try {
-      const response = await fetch(`/api/netease/search?keywords=${encodeURIComponent(keywords)}`);
+      const response = await fetch(`/api/netease/search?keywords=${encodeURIComponent(keywords)}&limit=30`, {
+        headers: createNeteaseCookieHeaders(neteaseCookie),
+      });
       if (!response.ok) throw new Error('Search request failed');
 
       const data = await response.json();
@@ -267,8 +468,12 @@ export function UI({ theme, onThemeChange }: UIProps) {
 
     try {
       const [urlResponse, lyricResponse] = await Promise.all([
-        fetch(`/api/netease/url?id=${song.id}`),
-        fetch(`/api/netease/lyric?id=${song.id}`),
+        fetch(`/api/netease/url?id=${song.id}`, {
+          headers: createNeteaseCookieHeaders(neteaseCookie),
+        }),
+        fetch(`/api/netease/lyric?id=${song.id}`, {
+          headers: createNeteaseCookieHeaders(neteaseCookie),
+        }),
       ]);
 
       const urlData = await urlResponse.json();
@@ -335,6 +540,17 @@ export function UI({ theme, onThemeChange }: UIProps) {
     const playlistName = playlists.find((playlist) => playlist.id === playlistId)?.name || 'playlist';
     setSearchStatus(`Added to ${playlistName}`);
     setSongToAdd(null);
+  };
+
+  const addSongToFavorites = (song: NeteaseSong) => {
+    setPlaylists((current) => current.map((playlist) => {
+      if (playlist.id !== 'favorites') return playlist;
+      const exists = playlist.songs.some((savedSong) => savedSong.id === song.id);
+      if (exists) return playlist;
+      return { ...playlist, songs: [...playlist.songs, song] };
+    }));
+    setSearchStatus('已加入喜欢');
+    setNeteaseCloudStatus('已加入喜欢');
   };
 
   const createPlaylistAndAddSong = () => {
@@ -461,29 +677,41 @@ export function UI({ theme, onThemeChange }: UIProps) {
       )}
       
       {/* Sidebar Left */}
-      <div className="absolute left-0 top-0 h-full w-[20px] z-[60] group hover:w-[60px] transition-all pointer-events-auto">
-        <aside className="absolute left-0 top-0 w-[60px] h-full border-r border-white/5 flex flex-col items-center py-6 pointer-events-auto -translate-x-full group-hover:translate-x-0 transition-transform duration-300" style={{ background: 'rgba(2,4,10,0.8)' }}>
+      <div className={`side-nav-trigger absolute left-0 top-0 h-full w-[20px] z-[60] group hover:w-[60px] transition-all pointer-events-auto ${isMobileSideNavOpen ? 'is-mobile-open' : ''}`}>
+        <aside className={`side-nav-panel absolute left-0 top-0 w-[60px] h-full border-r border-white/5 flex flex-col items-center py-6 pointer-events-auto ${isMobileSideNavOpen ? 'translate-x-0' : '-translate-x-full'} group-hover:translate-x-0 transition-transform duration-300`} style={{ background: 'rgba(2,4,10,0.8)' }}>
           <button className="uppercase tracking-[0.2em] text-[10px] mb-12 opacity-100 transition-opacity cursor-pointer" style={{ writingMode: 'vertical-rl', color: accentHex }}>Visualizer</button>
-          <button onClick={() => setShowFreqPanel(true)} className="uppercase tracking-[0.2em] text-[10px] mb-12 opacity-40 hover:opacity-100 transition-opacity cursor-pointer flex items-center justify-center gap-2" style={{ writingMode: 'vertical-rl' }}>
-            Trigger
+          <button onClick={() => { setShowOptionsPanel(true); setIsMobileSideNavOpen(false); }} className="uppercase tracking-[0.2em] text-[10px] mb-12 opacity-40 hover:opacity-100 transition-opacity cursor-pointer flex items-center justify-center gap-2" style={{ writingMode: 'vertical-rl' }}>
+            璁剧疆
           </button>
-          <button onClick={() => setShowSearchPanel(true)} className="uppercase tracking-[0.2em] text-[10px] mb-12 opacity-40 hover:opacity-100 transition-opacity cursor-pointer flex items-center justify-center gap-2" style={{ writingMode: 'vertical-rl' }}>
+          <button onClick={() => { setShowSearchPanel(true); setIsMobileSideNavOpen(false); }} className="uppercase tracking-[0.2em] text-[10px] mb-12 opacity-40 hover:opacity-100 transition-opacity cursor-pointer flex items-center justify-center gap-2" style={{ writingMode: 'vertical-rl' }}>
             Search
           </button>
-          <button onClick={() => setShowPlaylistPanel(true)} className="uppercase tracking-[0.2em] text-[10px] mb-12 opacity-40 hover:opacity-100 transition-opacity cursor-pointer flex items-center justify-center gap-2" style={{ writingMode: 'vertical-rl' }}>
+          {isNeteaseCookieValid && (
+            <button
+              onClick={() => {
+                setShowNeteasePanel(true);
+                loadDailyRecommendations();
+                setIsMobileSideNavOpen(false);
+              }}
+              className="uppercase tracking-[0.2em] text-[10px] mb-12 opacity-40 hover:opacity-100 transition-opacity cursor-pointer flex items-center justify-center gap-2"
+              style={{ writingMode: 'vertical-rl' }}
+            >
+              缃戞槗浜?            </button>
+          )}
+          <button onClick={() => { setShowPlaylistPanel(true); setIsMobileSideNavOpen(false); }} className="uppercase tracking-[0.2em] text-[10px] mb-12 opacity-40 hover:opacity-100 transition-opacity cursor-pointer flex items-center justify-center gap-2" style={{ writingMode: 'vertical-rl' }}>
             Playlist
           </button>
           
-          <div className="mt-auto flex flex-col items-center gap-10">
+          <div className="side-nav-bottom mt-auto flex flex-col items-center gap-10">
             <button 
-              onClick={loadDemo}
+              onClick={() => { loadDemo(); setIsMobileSideNavOpen(false); }}
               className="uppercase tracking-[0.2em] text-[10px] opacity-40 hover:opacity-100 transition-opacity cursor-pointer font-bold"
               style={{ writingMode: 'vertical-rl' }}
             >
               Demo
             </button>
             <button 
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => { fileInputRef.current?.click(); setIsMobileSideNavOpen(false); }}
               className="uppercase tracking-[0.2em] text-[10px] opacity-40 hover:opacity-100 transition-opacity cursor-pointer"
               style={{ writingMode: 'vertical-rl' }}
             >
@@ -499,6 +727,7 @@ export function UI({ theme, onThemeChange }: UIProps) {
                       if (engine.isCapturing) setTrackName('System Audio Capture');
                   });
                 }
+                setIsMobileSideNavOpen(false);
               }}
               className={`uppercase tracking-[0.2em] text-[10px] transition-opacity cursor-pointer ${isCapturing ? 'opacity-100 text-[#ef4444]' : 'opacity-40 hover:opacity-100'}`}
               style={{ writingMode: 'vertical-rl' }}
@@ -518,6 +747,16 @@ export function UI({ theme, onThemeChange }: UIProps) {
       </div>
 
       {/* Brand Mark */}
+      <button
+        type="button"
+        className="mobile-side-nav-toggle pointer-events-auto"
+        aria-label={isMobileSideNavOpen ? 'Close menu' : 'Open menu'}
+        aria-expanded={isMobileSideNavOpen}
+        onClick={() => setIsMobileSideNavOpen((open) => !open)}
+        style={{ color: isMobileSideNavOpen ? accentHex : undefined }}
+      >
+        {isMobileSideNavOpen ? <X size={16} /> : <Menu size={16} />}
+      </button>
       <div className="absolute top-[40px] left-[100px] font-black text-[24px] tracking-[-1px] text-white z-50 select-none">
         AJIN.
       </div>
@@ -581,7 +820,7 @@ export function UI({ theme, onThemeChange }: UIProps) {
                 >
                   <Plus size={15} />
                 </span>
-                <div className="mt-1 text-[11px] text-white/45 truncate">{song.artist || 'Unknown artist'} · {song.album || 'Unknown album'}</div>
+                <div className="mt-1 text-[11px] text-white/45 truncate">{song.artist || 'Unknown artist'} 路 {song.album || 'Unknown album'}</div>
               </button>
             ))}
           </div>
@@ -706,6 +945,67 @@ export function UI({ theme, onThemeChange }: UIProps) {
         </div>
       )}
 
+      {showNeteasePanel && (
+        <div className="absolute top-[40px] left-[100px] w-[460px] max-h-[76vh] z-[66] pointer-events-auto backdrop-blur-[20px] border border-white/10 rounded-sm overflow-hidden" style={{ background: 'rgba(5,10,15,0.92)' }}>
+          <div className="p-5 border-b border-white/10">
+            <div className="flex items-center justify-between mb-4">
+              <div className="text-[12px] uppercase tracking-[0.2em] text-white/70">网易云</div>
+              <button onClick={() => setShowNeteasePanel(false)} className="text-[10px] uppercase tracking-[0.15em] text-white/40 hover:text-white">鍏抽棴</button>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={loadLikedSongs}
+                className={`px-3 py-2 rounded-sm border text-[10px] uppercase tracking-[0.12em] transition-colors ${neteaseCloudTab === 'liked' ? 'text-black border-transparent' : 'text-white/45 border-white/10 hover:text-white'}`}
+                style={{ backgroundColor: neteaseCloudTab === 'liked' ? accentHex : 'transparent' }}
+              >
+                鍠滄
+              </button>
+              <button
+                onClick={loadNeteasePlaylists}
+                className={`px-3 py-2 rounded-sm border text-[10px] uppercase tracking-[0.12em] transition-colors ${neteaseCloudTab === 'playlists' ? 'text-black border-transparent' : 'text-white/45 border-white/10 hover:text-white'}`}
+                style={{ backgroundColor: neteaseCloudTab === 'playlists' ? accentHex : 'transparent' }}
+              >
+                姝屽崟
+              </button>
+              <button
+                onClick={loadDailyRecommendations}
+                className={`px-3 py-2 rounded-sm border text-[10px] uppercase tracking-[0.12em] transition-colors ${neteaseCloudTab === 'daily' ? 'text-black border-transparent' : 'text-white/45 border-white/10 hover:text-white'}`}
+                style={{ backgroundColor: neteaseCloudTab === 'daily' ? accentHex : 'transparent' }}
+              >
+                姣忔棩鎺ㄨ崘
+              </button>
+            </div>
+          </div>
+
+          {neteaseCloudTab === 'playlists' && (
+            <div className="p-3 border-b border-white/10 max-h-[140px] overflow-y-auto">
+              {neteaseCloudPlaylists.length > 0 ? neteaseCloudPlaylists.map((playlist) => (
+                <button
+                  key={playlist.id}
+                  onClick={() => loadNeteasePlaylistSongs(playlist)}
+                  className={`w-full flex items-center justify-between gap-3 px-3 py-3 text-left hover:bg-white/5 rounded-sm transition-colors ${activeNeteasePlaylistId === playlist.id ? 'bg-white/5' : ''}`}
+                >
+                  <span className="min-w-0 text-[12px] text-white truncate">{playlist.name}</span>
+                  <span className="text-[10px] text-white/35">{playlist.trackCount}</span>
+                </button>
+              )) : (
+                <div className="px-3 py-4 text-[12px] text-white/40">{isLoadingNeteaseCloud ? '姝ｅ湪鍔犺浇姝屽崟...' : '鐐瑰嚮鈥滄瓕鍗曗€濆姞杞戒綘鐨勭綉鏄撲簯姝屽崟'}</div>
+              )}
+            </div>
+          )}
+
+          {neteaseCloudStatus && <div className="px-5 py-3 border-b border-white/5 text-[11px] text-white/45">{neteaseCloudStatus}</div>}
+          <NeteaseSongList
+            songs={neteaseCloudSongs}
+            currentSongId={currentSongId}
+            queue={neteaseCloudSongs}
+            onPlay={loadNeteaseSong}
+            onFavorite={addSongToFavorites}
+            emptyText={isLoadingNeteaseCloud ? '姝ｅ湪鍔犺浇...' : '杩欓噷浼氭樉绀哄彲鎾斁姝屾洸'}
+          />
+        </div>
+      )}
+
       {pendingDelete && (
         <div className="absolute inset-0 z-[120] pointer-events-auto flex items-center justify-center bg-black/40 backdrop-blur-sm">
           <div className="w-[320px] border border-white/10 rounded-sm p-5" style={{ background: 'rgba(5,10,15,0.96)' }}>
@@ -735,9 +1035,9 @@ export function UI({ theme, onThemeChange }: UIProps) {
 
       {/* Player Panel */}
       {trackName !== 'No track selected' && (
-        <div className="absolute top-[40px] right-[40px] w-[300px] p-6 rounded-sm z-50 pointer-events-auto backdrop-blur-[20px] border border-white/10" style={{ background: 'rgba(255,255,255,0.03)' }}>
-          <div className="flex justify-between items-start mb-1">
-            <div className="text-[18px] font-light tracking-[0.05em] text-white truncate" title={trackName}>
+        <div className="player-panel absolute top-[40px] right-[40px] w-[300px] p-6 rounded-sm z-50 pointer-events-auto backdrop-blur-[20px] border border-white/10" style={{ background: 'rgba(255,255,255,0.03)' }}>
+          <div className="player-panel-header flex justify-between items-start mb-1">
+            <div className="player-panel-title text-[18px] font-light tracking-[0.05em] text-white truncate" title={trackName}>
               {trackName}
             </div>
             <button 
@@ -746,19 +1046,19 @@ export function UI({ theme, onThemeChange }: UIProps) {
                 const nextIndex = (keys.indexOf(theme) + 1) % keys.length;
                 onThemeChange(keys[nextIndex]);
               }}
-              className="text-white/40 hover:text-white transition-colors"
+              className="player-panel-theme text-white/40 hover:text-white transition-colors"
               title="Change Theme"
             >
               <Palette size={16} />
             </button>
           </div>
-          <div className="text-[12px] opacity-50 uppercase mb-6 tracking-wider">
+          <div className="player-panel-meta text-[12px] opacity-50 uppercase mb-6 tracking-wider">
              {isCapturing ? 'System Audio Capture' : 'Local Audio'}
              <span className="ml-2 text-[#3b82f6] text-[10px]">&bull; {themes[theme]?.name}</span>
           </div>
 
           {/* Progress bar */}
-          <div className={`h-[20px] mb-5 relative flex items-end group ${isCapturing ? 'opacity-30 pointer-events-none' : ''}`}>
+          <div className={`player-panel-progress h-[20px] mb-5 relative flex items-end group ${isCapturing ? 'opacity-30 pointer-events-none' : ''}`}>
              <div className="w-full relative h-[2px] bg-white/10 group-hover:h-[4px] transition-all">
                 <div 
                    className="absolute top-0 left-0 h-full"
@@ -782,9 +1082,9 @@ export function UI({ theme, onThemeChange }: UIProps) {
              />
           </div>
 
-          <div className={`flex justify-between items-center text-[10px] uppercase tracking-[0.1em] opacity-80 ${isCapturing ? 'opacity-30 pointer-events-none' : ''}`}>
-             <span className="w-8">{formatTime(currentTime)}</span>
-             <div className="flex items-center gap-4">
+          <div className={`player-panel-controls flex justify-between items-center text-[10px] uppercase tracking-[0.1em] opacity-80 ${isCapturing ? 'opacity-30 pointer-events-none' : ''}`}>
+             <span className="player-panel-time w-8">{formatTime(currentTime)}</span>
+             <div className="player-panel-actions flex items-center gap-4">
                 <button
                   onClick={() => playFromQueue(-1)}
                   className="hover:text-white transition-colors disabled:opacity-25 disabled:hover:text-inherit"
@@ -814,7 +1114,7 @@ export function UI({ theme, onThemeChange }: UIProps) {
                 </button>
              </div>
              
-             <div className="flex items-center gap-2 group w-20 justify-end">
+             <div className="player-panel-volume flex items-center gap-2 group w-20 justify-end">
                 <input 
                   type="range"
                   min={0} max={1} step={0.01}
@@ -837,7 +1137,7 @@ export function UI({ theme, onThemeChange }: UIProps) {
                   }} 
                 />
              </div>
-             <span className="w-8 text-right">{formatTime(duration)}</span>
+             <span className="player-panel-time w-8 text-right">{formatTime(duration)}</span>
           </div>
         </div>
       )}
@@ -857,19 +1157,30 @@ export function UI({ theme, onThemeChange }: UIProps) {
                 title="Upload .lrc file"
              >
                 <div className="w-1.5 h-1.5 rounded-full bg-red-500/50"></div>
-                No Lyrics • Click to upload .lrc
+                No Lyrics 鈥?Click to upload .lrc
              </div>
           )}
-          <StatsPanel accentHex={accentHex} />
+          <div className="mobile-hide-aux-ui">
+            <StatsPanel accentHex={accentHex} />
+          </div>
         </div>
       )}
 
-      <div className="absolute bottom-[40px] right-[40px] text-[10px] uppercase tracking-[0.1em] opacity-30 select-none">
-        Drag to orbit • Click to pulse
+      <div className="mobile-hide-aux-ui absolute bottom-[40px] right-[40px] text-[10px] uppercase tracking-[0.1em] opacity-30 select-none">
+        Drag to orbit 鈥?Click to pulse
       </div>
-      {/* Frequency Trigger Panel */}
-      {showFreqPanel && (
-        <FreqTriggerPanelWrapper onClose={() => setShowFreqPanel(false)} accentHex={accentHex} />
+      {/* Options Panel */}
+      {showOptionsPanel && (
+        <OptionsPanel
+          onClose={() => setShowOptionsPanel(false)}
+          accentHex={accentHex}
+          neteaseCookie={neteaseCookie}
+          setNeteaseCookie={setNeteaseCookie}
+          onSaveCookie={saveNeteaseCookie}
+          onClearCookie={clearNeteaseCookie}
+          cookieStatus={cookieStatus}
+          isNeteaseCookieValid={isNeteaseCookieValid}
+        />
       )}
     </div>
   );
@@ -877,14 +1188,213 @@ export function UI({ theme, onThemeChange }: UIProps) {
 
 import { TriggerPreset } from '../../lib/AudioEngine';
 
-function FreqTriggerPanelWrapper({ onClose, accentHex }: { onClose: () => void, accentHex: string }) {
-  const [action, setAction] = useState<'Pulse' | 'Meteor'>('Meteor');
+function NeteaseSongList({
+  songs,
+  currentSongId,
+  queue,
+  onPlay,
+  onFavorite,
+  emptyText,
+}: {
+  songs: NeteaseSong[];
+  currentSongId: number | null;
+  queue: NeteaseSong[];
+  onPlay: (song: NeteaseSong, queue?: NeteaseSong[]) => void;
+  onFavorite: (song: NeteaseSong) => void;
+  emptyText: string;
+}) {
   return (
-    <FreqTriggerPanel key={action} action={action} setAction={setAction} onClose={onClose} accentHex={accentHex} />
+    <div className="max-h-[44vh] overflow-y-auto">
+      {songs.length > 0 ? songs.map((song) => (
+        <button
+          key={song.id}
+          onClick={() => onPlay(song, queue)}
+          className="relative w-full text-left px-5 py-4 pr-16 border-b border-white/5 hover:bg-white/5 transition-colors"
+        >
+          <div className={`text-[13px] truncate ${currentSongId === song.id ? 'text-white' : 'text-white/80'}`}>{song.name}</div>
+          <span
+            role="button"
+            tabIndex={0}
+            onClick={(e) => {
+              e.stopPropagation();
+              onFavorite(song);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                e.stopPropagation();
+                onFavorite(song);
+              }
+            }}
+            className="absolute right-5 top-1/2 -translate-y-1/2 h-8 w-8 rounded-sm border border-white/10 text-white/55 hover:text-black hover:border-transparent transition-colors flex items-center justify-center"
+            title="鍔犲叆鍠滄"
+          >
+            <Plus size={15} />
+          </span>
+          <div className="mt-1 text-[11px] text-white/45 truncate">{song.artist || '鏈煡姝屾墜'} - {song.album || '鏈煡涓撹緫'}</div>
+        </button>
+      )) : (
+        <div className="px-5 py-8 text-[12px] text-white/40">{emptyText}</div>
+      )}
+    </div>
   );
 }
 
-function FreqTriggerPanel({ action, setAction, onClose, accentHex }: { action: 'Pulse' | 'Meteor', setAction: (a: 'Pulse' | 'Meteor') => void, onClose: () => void, accentHex: string }) {
+function OptionsPanel({
+  onClose,
+  accentHex,
+  neteaseCookie,
+  setNeteaseCookie,
+  onSaveCookie,
+  onClearCookie,
+  cookieStatus,
+  isNeteaseCookieValid,
+}: {
+  onClose: () => void;
+  accentHex: string;
+  neteaseCookie: string;
+  setNeteaseCookie: (cookie: string) => void;
+  onSaveCookie: () => void;
+  onClearCookie: () => void;
+  cookieStatus: string;
+  isNeteaseCookieValid: boolean;
+}) {
+  const [activeTab, setActiveTab] = useState<OptionsTab>('Meteor');
+  const tabs: OptionsTab[] = ['Pulse', 'Meteor', 'Cookie'];
+  const tabLabels: Record<OptionsTab, string> = {
+    Pulse: '鑴夊啿鐗规晥',
+    Meteor: '娴佹槦鐗规晥',
+    Cookie: '缃戞槗浜?Cookie',
+  };
+
+  return (
+    <div className="absolute inset-0 z-[100] backdrop-blur-md bg-black/50 flex flex-col items-center justify-center pointer-events-auto">
+       <div className="w-[80vw] max-w-[840px] max-h-[86vh] overflow-y-auto border border-white/10 rounded-sm p-8 transform transition-all shadow-2xl" style={{ background: 'rgba(5, 10, 15, 0.95)' }}>
+          <div className="flex justify-between items-center mb-6">
+             <div>
+               <div className="text-xl font-light tracking-widest text-white">璁剧疆</div>
+               <div className="mt-2 text-[10px] uppercase tracking-[0.18em] text-white/35">瑙嗚瑙﹀彂鍣ㄤ笌缃戞槗浜戠櫥褰?Cookie</div>
+             </div>
+             <button onClick={onClose} className="text-white/50 hover:text-white uppercase tracking-widest text-[10px]">鍏抽棴</button>
+          </div>
+
+          <div className="flex gap-2 mb-6">
+            {tabs.map((tab) => (
+               <button
+                  key={tab}
+                  onClick={() => setActiveTab(tab)}
+                  className={`px-3 py-1.5 text-[10px] uppercase tracking-widest rounded-sm border transition-colors ${
+                     activeTab === tab ? 'text-black border-transparent' : 'border-white/10 text-white/45 hover:text-white hover:bg-white/5'
+                  }`}
+                  style={{ backgroundColor: activeTab === tab ? accentHex : 'transparent' }}
+               >
+                  {tabLabels[tab]}
+               </button>
+            ))}
+          </div>
+
+          {activeTab === 'Cookie' ? (
+            <NeteaseCookiePanel
+              accentHex={accentHex}
+              neteaseCookie={neteaseCookie}
+              setNeteaseCookie={setNeteaseCookie}
+              onSaveCookie={onSaveCookie}
+              onClearCookie={onClearCookie}
+              cookieStatus={cookieStatus}
+              isNeteaseCookieValid={isNeteaseCookieValid}
+            />
+          ) : (
+            <FreqTriggerPanel key={activeTab} action={activeTab} accentHex={accentHex} />
+          )}
+       </div>
+    </div>
+  );
+}
+
+function NeteaseCookiePanel({
+  accentHex,
+  neteaseCookie,
+  setNeteaseCookie,
+  onSaveCookie,
+  onClearCookie,
+  cookieStatus,
+  isNeteaseCookieValid,
+}: {
+  accentHex: string;
+  neteaseCookie: string;
+  setNeteaseCookie: (cookie: string) => void;
+  onSaveCookie: () => void;
+  onClearCookie: () => void;
+  cookieStatus: string;
+  isNeteaseCookieValid: boolean;
+}) {
+  return (
+    <div className="grid gap-5">
+      <div className="border border-white/10 bg-white/[0.03] rounded-sm p-4">
+        <div className="flex items-start justify-between gap-4 mb-3">
+          <div>
+            <div className="text-[12px] uppercase tracking-[0.18em] text-white/70 mb-2">手动 Cookie 登录</div>
+            <div className="text-[11px] leading-relaxed text-white/45">
+              先在网易云官网正常登录，再从浏览器复制 Cookie。本项目不会自动读取官网 Cookie。
+            </div>
+          </div>
+          <button
+            onClick={() => window.open('https://music.163.com/', '_blank', 'noopener,noreferrer')}
+            className="shrink-0 px-3 py-2 rounded-sm text-[10px] uppercase tracking-[0.15em] text-black"
+            style={{ backgroundColor: accentHex }}
+          >
+            打开官网
+          </button>
+        </div>
+        <ol className="grid gap-2 text-[12px] leading-relaxed text-white/55 list-decimal list-inside">
+          <li>用电脑 Chrome 或 Edge 打开 music.163.com，先登录网易云账号。</li>
+          <li>按 F12 打开开发者工具；如果没有反应，试试 Fn + F12 或 Ctrl + Shift + I。</li>
+          <li>点顶部的 Network/网络，刷新网易云页面或播放、搜索一首歌。</li>
+          <li>在过滤输入框里搜 weapi；搜不到就改搜 music.163.com。</li>
+          <li>点任意请求，在 Headers/标头里搜索 cookie。</li>
+          <li>复制 Cookie: 后面的整段内容，粘贴到下面输入框，点保存 Cookie。</li>
+        </ol>
+        <div className="mt-3 text-[11px] leading-relaxed text-white/35">
+          手机浏览器通常没有 F12/Network，复制 Cookie 建议用电脑。Cookie 只保存在当前浏览器，不能绕过版权、会员或地区限制。
+        </div>
+      </div>
+      <div className="grid gap-2">
+        <label className="text-[10px] uppercase tracking-[0.18em] text-white/45">网易云 Cookie</label>
+        <textarea
+          value={neteaseCookie}
+          onChange={(e) => setNeteaseCookie(e.target.value)}
+          spellCheck={false}
+          placeholder="MUSIC_U=...; __csrf=...; NMTID=..."
+          className="min-h-[180px] resize-y bg-black/40 border border-white/10 rounded-sm px-3 py-3 text-[12px] leading-relaxed text-white outline-none focus:border-white/30 font-mono"
+        />
+      </div>
+      <div className="text-[11px] leading-relaxed text-white/45">
+        可以直接粘贴多行 Cookie，保存时会自动整理成网易云接口能用的格式。
+      </div>
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-[11px] text-white/45">
+          {cookieStatus || (neteaseCookie.trim() ? (isNeteaseCookieValid ? 'Cookie 可用，网易云入口已开启' : '已从浏览器读取 Cookie，请点击保存进行校验') : '当前没有保存 Cookie')}
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={onClearCookie}
+            className="px-3 py-2 rounded-sm border border-white/10 text-[10px] uppercase tracking-[0.15em] text-white/45 hover:text-white"
+          >
+            清除
+          </button>
+          <button
+            onClick={onSaveCookie}
+            className="px-3 py-2 rounded-sm text-[10px] uppercase tracking-[0.15em] text-black"
+            style={{ backgroundColor: accentHex }}
+          >
+            保存 Cookie
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+function FreqTriggerPanel({ action, accentHex }: { action: 'Pulse' | 'Meteor', accentHex: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   
   const getConfig = () => action === 'Pulse' ? engine.pulseTrigger : engine.meteorTrigger;
@@ -919,6 +1429,11 @@ function FreqTriggerPanel({ action, setAction, onClose, accentHex }: { action: '
      } else {
          c.freqIndex = -1;
      }
+
+     writeTriggerSettingsStorage({
+       Pulse: snapshotTriggerConfig(engine.pulseTrigger),
+       Meteor: snapshotTriggerConfig(engine.meteorTrigger),
+     });
   }, [isEnabled, mode, sensitivity, cooldown, pulseStrength, bandStart, bandEnd, triggerPoint]);
 
   const handleModeChange = (newMode: TriggerPreset) => {
@@ -926,6 +1441,11 @@ function FreqTriggerPanel({ action, setAction, onClose, accentHex }: { action: '
   };
 
   const presets: TriggerPreset[] = ['Auto Beat', 'Advanced'];
+  const modeLabels: Record<TriggerPreset, string> = {
+    'Auto Beat': '鑷姩鑺傛媿',
+    Advanced: '楂樼骇妯″紡',
+  };
+  const actionLabel = action === 'Pulse' ? '鑴夊啿鐗规晥' : '娴佹槦鐗规晥';
 
   useEffect(() => {
     let animationId: number;
@@ -1061,44 +1581,19 @@ function FreqTriggerPanel({ action, setAction, onClose, accentHex }: { action: '
   };
 
   return (
-    <div className="absolute inset-0 z-[100] backdrop-blur-md bg-black/50 flex flex-col items-center justify-center pointer-events-auto">
-       <div className="w-[80vw] max-w-[800px] border border-white/10 rounded-xl p-8 transform transition-all shadow-2xl" style={{ background: 'rgba(5, 10, 15, 0.95)' }}>
-          <div className="flex justify-between items-center mb-6">
-             <div className="flex items-center gap-6">
-               <h2 className="text-xl font-light tracking-widest text-white">FREQUENCY TRIGGER</h2>
-               <div className="flex items-center gap-4">
-                 <label className="flex items-center gap-2 cursor-pointer">
-                   <input 
-                     type="checkbox" 
-                     checked={isEnabled} 
-                     onChange={(e) => setIsEnabled(e.target.checked)}
-                     className="w-4 h-4 rounded-sm border-white/20 bg-black/50"
-                     style={{ accentColor: accentHex }}
-                   />
-                   <span className="text-[10px] uppercase tracking-widest text-white/50">Enable</span>
-                 </label>
-                 
-                 {isEnabled && (
-                   <div className="flex items-center rounded overflow-hidden border border-white/10 text-[10px] uppercase tracking-widest">
-                     <button 
-                       onClick={() => setAction('Pulse')}
-                       className={`px-3 py-1 transition-colors ${action === 'Pulse' ? 'text-black' : 'text-white/50 hover:bg-white/5'}`}
-                       style={{ backgroundColor: action === 'Pulse' ? accentHex : 'transparent' }}
-                     >
-                       Pulse
-                     </button>
-                     <button 
-                       onClick={() => setAction('Meteor')}
-                       className={`px-3 py-1 transition-colors ${action === 'Meteor' ? 'text-black' : 'text-white/50 hover:bg-white/5'}`}
-                       style={{ backgroundColor: action === 'Meteor' ? accentHex : 'transparent' }}
-                     >
-                       Meteor
-                     </button>
-                   </div>
-                 )}
-               </div>
-             </div>
-             <button onClick={onClose} className="text-white/50 hover:text-white uppercase tracking-widest text-[10px]">Close</button>
+    <div>
+          <div className="flex items-center justify-between mb-6">
+             <div className="text-[12px] uppercase tracking-[0.2em] text-white/70">{actionLabel}</div>
+             <label className="flex items-center gap-2 cursor-pointer">
+               <input 
+                 type="checkbox" 
+                 checked={isEnabled} 
+                 onChange={(e) => setIsEnabled(e.target.checked)}
+                 className="w-4 h-4 rounded-sm border-white/20 bg-black/50"
+                 style={{ accentColor: accentHex }}
+               />
+               <span className="text-[10px] uppercase tracking-widest text-white/50">鍚敤</span>
+             </label>
           </div>
           
           <div className="flex gap-2 mb-4">
@@ -1110,15 +1605,15 @@ function FreqTriggerPanel({ action, setAction, onClose, accentHex }: { action: '
                      mode === p ? 'bg-white/10 text-white border-white/20' : 'border-transparent text-white/40 hover:text-white hover:bg-white/5'
                   }`}
                >
-                  {p}
+                  {modeLabels[p]}
                </button>
             ))}
           </div>
 
           <p className="text-[11px] text-white/40 mb-6 font-mono h-10 leading-relaxed">
             {mode === 'Advanced' 
-              ? "Drag the crosshair to set the target frequency (X) and threshold (Y).\nWhen the spectrum exceeds this threshold, a visual pulse is triggered."
-              : `Dynamic ${mode} detection enabled. Pulses trigger when instantaneous energy significantly exceeds the rolling average of this specific frequency band.`}
+              ? '拖动十字线设置目标频率和触发阈值。频谱超过阈值时，会触发当前视觉特效。'
+              : '自动节拍会比较当前频段能量和滚动平均值，能量明显抬升时触发视觉特效。'}
           </p>
           <div className={`relative w-full aspect-[2/1] bg-black/50 border border-white/5 rounded overflow-hidden ${mode === 'Advanced' ? 'cursor-crosshair' : ''}`}>
             <canvas 
@@ -1137,21 +1632,21 @@ function FreqTriggerPanel({ action, setAction, onClose, accentHex }: { action: '
             <div className="mt-8 grid grid-cols-2 gap-6">
                <div className="flex flex-col gap-2">
                  <div className="flex justify-between uppercase tracking-widest text-[10px] text-white/50">
-                    <span>Sensitivity</span>
+                    <span>灵敏度</span>
                     <span style={{ color: accentHex }}>{sensitivity.toFixed(2)}</span>
                  </div>
                  <input type="range" min="0" max="1" step="0.05" value={sensitivity} onChange={e => setSensitivity(parseFloat(e.target.value))} className="w-full accent-current h-1" style={{ accentColor: accentHex }}/>
                </div>
                <div className="flex flex-col gap-2">
                  <div className="flex justify-between uppercase tracking-widest text-[10px] text-white/50">
-                    <span>Cooldown (frames)</span>
+                    <span>鍐峰嵈甯ф暟</span>
                     <span style={{ color: accentHex }}>{cooldown}</span>
                  </div>
                  <input type="range" min="0" max="300" step="1" value={cooldown} onChange={e => setCooldown(parseInt(e.target.value))} className="w-full accent-current h-1" style={{ accentColor: accentHex }}/>
                </div>
                <div className="flex flex-col gap-2">
                  <div className="flex justify-between uppercase tracking-widest text-[10px] text-white/50">
-                    <span>Freq Band ({bandStart} - {bandEnd})</span>
+                    <span>瑙﹀彂棰戞 ({bandStart} - {bandEnd})</span>
                  </div>
                  <div className="flex gap-2">
                    <input type="range" min="0" max="250" step="1" value={bandStart} onChange={e => setBandStart(Math.min(parseInt(e.target.value), bandEnd - 1))} className="w-1/2 accent-current h-1" style={{ accentColor: accentHex }}/>
@@ -1160,14 +1655,13 @@ function FreqTriggerPanel({ action, setAction, onClose, accentHex }: { action: '
                </div>
                <div className="flex flex-col gap-2">
                  <div className="flex justify-between uppercase tracking-widest text-[10px] text-white/50">
-                    <span>Pulse Strength</span>
+                    <span>鐗规晥寮哄害</span>
                     <span style={{ color: accentHex }}>{pulseStrength.toFixed(2)}</span>
                  </div>
                  <input type="range" min="0" max="5" step="0.1" value={pulseStrength} onChange={e => setPulseStrength(parseFloat(e.target.value))} className="w-full accent-current h-1" style={{ accentColor: accentHex }}/>
                </div>
             </div>
           )}
-       </div>
     </div>
   );
 }
@@ -1210,3 +1704,7 @@ function StatBox({ label, value, accentHex }: { label: string, value: number, ac
     </div>
   );
 }
+
+
+
+

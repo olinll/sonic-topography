@@ -1,5 +1,11 @@
 import { AudioData } from '../types';
 
+declare global {
+  interface Window {
+    wallpaperRegisterAudioListener?: (callback: (audioArray: number[]) => void) => void;
+  }
+}
+
 export type TriggerPreset = 'Auto Beat' | 'Advanced';
 
 export class TriggerConfig {
@@ -60,7 +66,8 @@ export class AudioEngine {
   private captureSource: MediaStreamAudioSourceNode | null = null;
   public audioElement: HTMLAudioElement;
 
-  private dataArray: Uint8Array = new Uint8Array(0);
+  private dataArray: Uint8Array = new Uint8Array(512);
+  private wallpaperAudioActiveUntil = 0;
   
   public isPlaying: boolean = false;
   public isCapturing: boolean = false;
@@ -94,6 +101,8 @@ export class AudioEngine {
     this.audioElement.addEventListener('pause', () => {
       this.isPlaying = false;
     });
+
+    this.registerWallpaperAudioListener();
   }
 
   public init() {
@@ -117,6 +126,25 @@ export class AudioEngine {
     this.fadeNode.connect(this.analyser);
     
     this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+  }
+
+  private registerWallpaperAudioListener() {
+    if (typeof window.wallpaperRegisterAudioListener !== 'function') return;
+
+    window.wallpaperRegisterAudioListener((audioArray) => {
+      const halfCount = Math.floor(audioArray.length / 2);
+      if (halfCount <= 0) return;
+
+      for (let i = 0; i < this.dataArray.length; i++) {
+        const sourceIndex = Math.min(halfCount - 1, Math.floor((i / this.dataArray.length) * halfCount));
+        const left = Math.min(1, Math.max(0, audioArray[sourceIndex] || 0));
+        const right = Math.min(1, Math.max(0, audioArray[sourceIndex + halfCount] || 0));
+        this.dataArray[i] = Math.round(((left + right) / 2) * 255);
+      }
+
+      this.wallpaperAudioActiveUntil = performance.now() + 300;
+      this.isPlaying = true;
+    });
   }
 
   public async startCapture() {
@@ -322,7 +350,9 @@ export class AudioEngine {
 
 
   public getAudioData(): AudioData {
-    if (!this.analyser) {
+    const hasWallpaperAudio = performance.now() < this.wallpaperAudioActiveUntil;
+
+    if (!this.analyser && !hasWallpaperAudio) {
       return { ...this.smoothedData };
     }
 
@@ -338,8 +368,10 @@ export class AudioEngine {
 
     const binCount = this.dataArray.length; // 512
 
-    if (this.isPlaying) {
-      this.analyser.getByteFrequencyData(this.dataArray);
+    if (this.isPlaying || hasWallpaperAudio) {
+      if (!hasWallpaperAudio) {
+        this.analyser?.getByteFrequencyData(this.dataArray);
+      }
 
       let fluxPulse = 0;
       let fluxMeteor = 0;
