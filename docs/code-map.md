@@ -147,6 +147,8 @@ src/lib/themes.ts defines the four built-in themes and keeps their exact color v
 -> active custom preset id persists in browser localStorage key sonic-topography-active-custom-theme-v1
 -> custom presets use background/cool/warm/accent colors plus glow intensity
 -> the player palette button cycles through the built-in themes plus the active custom preset
+-> optional theme rotation settings persist in browser localStorage key sonic-topography-theme-rotation-v1
+-> rotation can include any built-in theme plus any saved custom preset, with a user-selected interval
 -> createCustomThemeColors() derives the shader colors from those simple controls
 -> App passes resolvedTheme to UI and MapScene
 -> UI uses resolvedTheme.uRippleColor as the accent for buttons, sliders, progress, lyrics, stats, Pulse controls, and Meteor controls

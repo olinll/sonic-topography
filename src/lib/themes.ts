@@ -23,11 +23,19 @@ export interface ThemeColors {
   uGlowIntensity: number;
 }
 
+export interface ThemeRotationSettings {
+  enabled: boolean;
+  intervalSeconds: number;
+  themeIds: string[];
+}
+
 export const CUSTOM_THEME_ID = 'custom';
+export const BUILT_IN_THEME_IDS = ['nocturnal', 'neon-tokyo', 'cyber-forest', 'minimal-monochrome'];
 export const CUSTOM_THEME_STORAGE_KEY = 'sonic-topography-custom-themes-v2';
 export const LEGACY_CUSTOM_THEME_STORAGE_KEY = 'sonic-topography-custom-theme-v1';
 export const ACTIVE_CUSTOM_THEME_STORAGE_KEY = 'sonic-topography-active-custom-theme-v1';
 export const ACTIVE_THEME_STORAGE_KEY = 'sonic-topography-active-theme-v1';
+export const THEME_ROTATION_STORAGE_KEY = 'sonic-topography-theme-rotation-v1';
 
 export const defaultCustomThemeSettings: CustomThemeSettings = {
   id: 'custom-default',
@@ -39,6 +47,12 @@ export const defaultCustomThemeSettings: CustomThemeSettings = {
   glowIntensity: 1.1,
 };
 
+export const defaultThemeRotationSettings: ThemeRotationSettings = {
+  enabled: false,
+  intervalSeconds: 10,
+  themeIds: BUILT_IN_THEME_IDS,
+};
+
 function normalizeHexColor(value: unknown, fallback: string) {
   const color = String(value || '').trim();
   return /^#[0-9a-fA-F]{6}$/.test(color) ? color : fallback;
@@ -48,6 +62,12 @@ function clampGlowIntensity(value: unknown) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return defaultCustomThemeSettings.glowIntensity;
   return Math.max(0.4, Math.min(numeric, 2.2));
+}
+
+function clampRotationInterval(value: unknown) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return defaultThemeRotationSettings.intervalSeconds;
+  return Math.max(3, Math.min(Math.round(numeric), 300));
 }
 
 export function normalizeCustomThemeSettings(value: Partial<CustomThemeSettings> | null | undefined): CustomThemeSettings {
@@ -115,14 +135,46 @@ export function readActiveThemeStorage() {
   if (typeof window === 'undefined') return 'nocturnal';
 
   const stored = window.localStorage.getItem(ACTIVE_THEME_STORAGE_KEY) || '';
-  return stored === CUSTOM_THEME_ID || Object.prototype.hasOwnProperty.call(themes, stored) ? stored : 'nocturnal';
+  return stored === CUSTOM_THEME_ID || BUILT_IN_THEME_IDS.includes(stored) ? stored : 'nocturnal';
 }
 
 export function writeActiveThemeStorage(themeId: string) {
   if (typeof window === 'undefined') return;
-  if (themeId === CUSTOM_THEME_ID || Object.prototype.hasOwnProperty.call(themes, themeId)) {
+  if (themeId === CUSTOM_THEME_ID || BUILT_IN_THEME_IDS.includes(themeId)) {
     window.localStorage.setItem(ACTIVE_THEME_STORAGE_KEY, themeId);
   }
+}
+
+export function normalizeThemeRotationSettings(
+  value: Partial<ThemeRotationSettings> | null | undefined,
+  availableThemeIds: string[],
+): ThemeRotationSettings {
+  const fallbackThemeIds = availableThemeIds.length ? availableThemeIds : BUILT_IN_THEME_IDS;
+  const incomingThemeIds = Array.isArray(value?.themeIds) ? value.themeIds.map(String) : fallbackThemeIds;
+  const themeIds = incomingThemeIds.filter((id, index, ids) => fallbackThemeIds.includes(id) && ids.indexOf(id) === index);
+
+  return {
+    enabled: Boolean(value?.enabled),
+    intervalSeconds: clampRotationInterval(value?.intervalSeconds),
+    themeIds: themeIds.length ? themeIds : fallbackThemeIds,
+  };
+}
+
+export function readThemeRotationStorage(availableThemeIds: string[]) {
+  if (typeof window === 'undefined') return normalizeThemeRotationSettings(defaultThemeRotationSettings, availableThemeIds);
+
+  try {
+    const raw = window.localStorage.getItem(THEME_ROTATION_STORAGE_KEY);
+    return normalizeThemeRotationSettings(raw ? JSON.parse(raw) : defaultThemeRotationSettings, availableThemeIds);
+  } catch (error) {
+    console.warn('Unable to read theme rotation settings:', error);
+    return normalizeThemeRotationSettings(defaultThemeRotationSettings, availableThemeIds);
+  }
+}
+
+export function writeThemeRotationStorage(settings: ThemeRotationSettings, availableThemeIds: string[]) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(THEME_ROTATION_STORAGE_KEY, JSON.stringify(normalizeThemeRotationSettings(settings, availableThemeIds)));
 }
 
 export function createCustomThemeColors(settings: CustomThemeSettings): ThemeColors {

@@ -1,7 +1,7 @@
 ﻿import React, { useRef, useState, useEffect } from 'react';
 import { Play, Pause, Volume2, SkipForward, SkipBack, Palette, Plus, ListMusic, Shuffle, Repeat, Trash2, Menu, X } from 'lucide-react';
 import { engine } from '../../lib/AudioEngine';
-import { CUSTOM_THEME_ID, createCustomThemePreset, themes, type CustomThemeSettings, type ThemeColors } from '../../lib/themes';
+import { BUILT_IN_THEME_IDS, CUSTOM_THEME_ID, createCustomThemePreset, themes, type CustomThemeSettings, type ThemeColors, type ThemeRotationSettings } from '../../lib/themes';
 import { LyricsDisplay } from './LyricsDisplay';
 import { extractAudioMetadata, extractLyricsFromAudio } from '../../lib/metadata';
 import {
@@ -20,8 +20,10 @@ interface UIProps {
   resolvedTheme: ThemeColors;
   customThemes: CustomThemeSettings[];
   activeCustomThemeId: string;
+  themeRotation: ThemeRotationSettings;
   onThemeChange: (theme: string) => void;
   onCustomThemesChange: (settings: CustomThemeSettings[], activeId?: string) => void;
+  onThemeRotationChange: (settings: ThemeRotationSettings) => void;
 }
 
 interface NeteaseSong {
@@ -118,7 +120,7 @@ function loadStoredTriggerSettings() {
 
 loadStoredTriggerSettings();
 
-export function UI({ theme, resolvedTheme, customThemes, activeCustomThemeId, onThemeChange, onCustomThemesChange }: UIProps) {
+export function UI({ theme, resolvedTheme, customThemes, activeCustomThemeId, themeRotation, onThemeChange, onCustomThemesChange, onThemeRotationChange }: UIProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const demoAudioUrl = `${baseUrl}demo.mp3`;
   const demoLyricsUrl = `${baseUrl}demo.lrc`;
@@ -1289,8 +1291,10 @@ export function UI({ theme, resolvedTheme, customThemes, activeCustomThemeId, on
           theme={theme}
           customThemes={customThemes}
           activeCustomThemeId={activeCustomThemeId}
+          themeRotation={themeRotation}
           onThemeChange={onThemeChange}
           onCustomThemesChange={onCustomThemesChange}
+          onThemeRotationChange={onThemeRotationChange}
         />
       )}
     </div>
@@ -1364,8 +1368,10 @@ function OptionsPanel({
   theme,
   customThemes,
   activeCustomThemeId,
+  themeRotation,
   onThemeChange,
   onCustomThemesChange,
+  onThemeRotationChange,
 }: {
   onClose: () => void;
   accentHex: string;
@@ -1379,8 +1385,10 @@ function OptionsPanel({
   theme: string;
   customThemes: CustomThemeSettings[];
   activeCustomThemeId: string;
+  themeRotation: ThemeRotationSettings;
   onThemeChange: (theme: string) => void;
   onCustomThemesChange: (settings: CustomThemeSettings[], activeId?: string) => void;
+  onThemeRotationChange: (settings: ThemeRotationSettings) => void;
 }) {
   const [activeTab, setActiveTab] = useState<OptionsTab>('Meteor');
   const tabs: OptionsTab[] = ['Pulse', 'Meteor', 'Color', 'Cookie'];
@@ -1423,8 +1431,10 @@ function OptionsPanel({
               theme={theme}
               customThemes={customThemes}
               activeCustomThemeId={activeCustomThemeId}
+              themeRotation={themeRotation}
               onThemeChange={onThemeChange}
               onCustomThemesChange={onCustomThemesChange}
+              onThemeRotationChange={onThemeRotationChange}
             />
           ) : activeTab === 'Cookie' ? (
             <NeteaseCookiePanel
@@ -1450,20 +1460,53 @@ function CustomColorPanel({
   theme,
   customThemes,
   activeCustomThemeId,
+  themeRotation,
   onThemeChange,
   onCustomThemesChange,
+  onThemeRotationChange,
 }: {
   accentHex: string;
   theme: string;
   customThemes: CustomThemeSettings[];
   activeCustomThemeId: string;
+  themeRotation: ThemeRotationSettings;
   onThemeChange: (theme: string) => void;
   onCustomThemesChange: (settings: CustomThemeSettings[], activeId?: string) => void;
+  onThemeRotationChange: (settings: ThemeRotationSettings) => void;
 }) {
   const activePreset = customThemes.find((preset) => preset.id === activeCustomThemeId) || customThemes[0] || createCustomThemePreset();
+  const rotationItems = [
+    ...BUILT_IN_THEME_IDS.map((id) => ({
+      id,
+      name: themes[id]?.name || id,
+      colors: [
+        `#${themes[id].uBaseColor1.getHexString()}`,
+        `#${themes[id].uCoolCore.getHexString()}`,
+        `#${themes[id].uWarmCore.getHexString()}`,
+        `#${themes[id].uRippleColor.getHexString()}`,
+      ],
+    })),
+    ...customThemes.map((preset) => ({
+      id: preset.id,
+      name: preset.name,
+      colors: [preset.background, preset.cool, preset.warm, preset.accent],
+    })),
+  ];
 
   const savePresets = (nextPresets: CustomThemeSettings[], nextActiveId = activePreset.id) => {
     onCustomThemesChange(nextPresets, nextActiveId);
+  };
+
+  const updateRotation = (patch: Partial<ThemeRotationSettings>) => {
+    onThemeRotationChange({ ...themeRotation, ...patch });
+  };
+
+  const toggleRotationTheme = (themeId: string) => {
+    const isSelected = themeRotation.themeIds.includes(themeId);
+    const nextIds = isSelected
+      ? themeRotation.themeIds.filter((id) => id !== themeId)
+      : [...themeRotation.themeIds, themeId];
+    updateRotation({ themeIds: nextIds });
   };
 
   const updateCustomTheme = (patch: Partial<CustomThemeSettings>) => {
@@ -1516,6 +1559,84 @@ function CustomColorPanel({
         >
           新建主题
         </button>
+      </div>
+
+      <div className="grid gap-4 rounded-sm border border-white/10 bg-white/[0.03] p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-[12px] uppercase tracking-[0.18em] text-white/70 mb-2">自动轮换主题</div>
+            <div className="text-[11px] leading-relaxed text-white/45">选择参与轮换的默认主题和自定义主题，并设置切换间隔。</div>
+          </div>
+          <button
+            onClick={() => updateRotation({ enabled: !themeRotation.enabled })}
+            className={`px-3 py-2 rounded-sm border text-[10px] uppercase tracking-[0.15em] transition-colors ${
+              themeRotation.enabled ? 'text-black border-transparent' : 'border-white/10 text-white/45 hover:text-white'
+            }`}
+            style={{ backgroundColor: themeRotation.enabled ? accentHex : 'transparent' }}
+          >
+            {themeRotation.enabled ? '已开启' : '开启轮换'}
+          </button>
+        </div>
+
+        <div className="grid gap-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-[12px] text-white/75">轮换时间</div>
+            <div className="text-[12px]" style={{ color: accentHex }}>{themeRotation.intervalSeconds} 秒</div>
+          </div>
+          <input
+            type="range"
+            min="3"
+            max="120"
+            step="1"
+            value={themeRotation.intervalSeconds}
+            onChange={(event) => updateRotation({ intervalSeconds: Number(event.target.value) })}
+            className="w-full accent-current h-1"
+            style={{ accentColor: accentHex }}
+          />
+        </div>
+
+        <div className="flex gap-2">
+          <button
+            onClick={() => updateRotation({ themeIds: rotationItems.map((item) => item.id) })}
+            className="px-3 py-1.5 rounded-sm border border-white/10 text-[10px] uppercase tracking-[0.15em] text-white/45 hover:text-white transition-colors"
+          >
+            全选
+          </button>
+          <button
+            onClick={() => updateRotation({ themeIds: [] })}
+            className="px-3 py-1.5 rounded-sm border border-white/10 text-[10px] uppercase tracking-[0.15em] text-white/45 hover:text-white transition-colors"
+          >
+            清空
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {rotationItems.map((item) => {
+            const isSelected = themeRotation.themeIds.includes(item.id);
+            return (
+              <button
+                key={item.id}
+                onClick={() => toggleRotationTheme(item.id)}
+                className={`flex items-center justify-between gap-3 rounded-sm border px-3 py-2 text-left transition-colors ${
+                  isSelected ? 'border-white/35 bg-white/10' : 'border-white/10 bg-black/20 hover:bg-white/5'
+                }`}
+              >
+                <span className="min-w-0">
+                  <span className="block text-[11px] text-white/75 truncate">{item.name}</span>
+                  <span className="mt-2 flex gap-1">
+                    {item.colors.map((color) => (
+                      <span key={`${item.id}-${color}`} className="h-2.5 w-5 rounded-[1px]" style={{ backgroundColor: color }} />
+                    ))}
+                  </span>
+                </span>
+                <span
+                  className="h-4 w-4 shrink-0 rounded-sm border"
+                  style={{ borderColor: isSelected ? accentHex : 'rgba(255,255,255,0.18)', backgroundColor: isSelected ? accentHex : 'transparent' }}
+                />
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <div className="flex gap-2 overflow-x-auto pb-1">

@@ -1,18 +1,22 @@
 import { Canvas } from '@react-three/fiber';
 import { UI } from './components/UI/UI';
 import { MapScene } from './components/AudioVisualizer/MapScene';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
+  BUILT_IN_THEME_IDS,
   CUSTOM_THEME_ID,
   createCustomThemeColors,
   readActiveCustomThemeStorage,
   readActiveThemeStorage,
   readCustomThemeStorage,
+  readThemeRotationStorage,
   themes,
   writeActiveCustomThemeStorage,
   writeActiveThemeStorage,
   writeCustomThemeStorage,
+  writeThemeRotationStorage,
   type CustomThemeSettings,
+  type ThemeRotationSettings,
 } from './lib/themes';
 
 function readInitialCustomThemeState() {
@@ -29,6 +33,8 @@ export default function App() {
   const customThemes = customThemeState.presets;
   const activeCustomThemeId = customThemeState.activeId;
   const activeCustomTheme = customThemes.find((preset) => preset.id === activeCustomThemeId) || customThemes[0];
+  const availableRotationThemeIds = [...BUILT_IN_THEME_IDS, ...customThemes.map((preset) => preset.id)];
+  const [themeRotation, setThemeRotation] = useState<ThemeRotationSettings>(() => readThemeRotationStorage(availableRotationThemeIds));
   const resolvedTheme = theme === CUSTOM_THEME_ID ? createCustomThemeColors(activeCustomTheme) : (themes[theme] || themes['nocturnal']);
 
   const updateTheme = (themeId: string) => {
@@ -36,11 +42,51 @@ export default function App() {
     writeActiveThemeStorage(themeId);
   };
 
+  const activateThemeId = (themeId: string) => {
+    if (BUILT_IN_THEME_IDS.includes(themeId)) {
+      updateTheme(themeId);
+      return;
+    }
+
+    if (customThemes.some((preset) => preset.id === themeId)) {
+      updateCustomThemes(customThemes, themeId);
+      updateTheme(CUSTOM_THEME_ID);
+    }
+  };
+
   const updateCustomThemes = (settings: CustomThemeSettings[], activeId = activeCustomThemeId) => {
     setCustomThemeState({ presets: settings, activeId });
     writeCustomThemeStorage(settings);
     writeActiveCustomThemeStorage(activeId);
   };
+
+  const updateThemeRotation = (settings: ThemeRotationSettings) => {
+    setThemeRotation(settings);
+    writeThemeRotationStorage(settings, availableRotationThemeIds);
+  };
+
+  useEffect(() => {
+    const normalized = readThemeRotationStorage(availableRotationThemeIds);
+    setThemeRotation((current) => {
+      const nextThemeIds = current.themeIds.filter((id) => availableRotationThemeIds.includes(id));
+      const next = { ...current, themeIds: nextThemeIds.length ? nextThemeIds : normalized.themeIds };
+      writeThemeRotationStorage(next, availableRotationThemeIds);
+      return next;
+    });
+  }, [customThemes.length]);
+
+  useEffect(() => {
+    if (!themeRotation.enabled || themeRotation.themeIds.length < 2) return;
+
+    const timer = window.setInterval(() => {
+      const currentThemeId = theme === CUSTOM_THEME_ID ? activeCustomThemeId : theme;
+      const currentIndex = themeRotation.themeIds.indexOf(currentThemeId);
+      const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % themeRotation.themeIds.length : 0;
+      activateThemeId(themeRotation.themeIds[nextIndex]);
+    }, themeRotation.intervalSeconds * 1000);
+
+    return () => window.clearInterval(timer);
+  }, [themeRotation, theme, activeCustomThemeId, customThemes]);
 
   // Convert THREE.Color to css strings
   const bgDark = `#${resolvedTheme.uBaseColor1.getHexString()}`;
@@ -52,8 +98,10 @@ export default function App() {
         resolvedTheme={resolvedTheme}
         customThemes={customThemes}
         activeCustomThemeId={activeCustomThemeId}
+        themeRotation={themeRotation}
         onThemeChange={updateTheme}
         onCustomThemesChange={updateCustomThemes}
+        onThemeRotationChange={updateThemeRotation}
       />
       <div className="absolute inset-0 z-0">
         <Canvas camera={{ position: [35, 25, 35], fov: 45 }}>
