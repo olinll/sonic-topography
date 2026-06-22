@@ -78,14 +78,14 @@ Settings -> Netease Cookie -> open music.163.com and copy a browser Cookie manua
 Netease cloud library flow:
 
 ```text
-璁剧疆 -> 缃戞槗浜?Cookie -> 淇濆瓨 Cookie
+Settings -> Netease Cookie -> save Cookie
 -> PUT /api/netease/cookie validates Cookie with music.163.com account API
--> UI shows left-side 缃戞槗浜?entry only when valid is true
--> click 缃戞槗浜?
--> secondary menu offers 鍠滄, 姝屽崟, 姣忔棩鎺ㄨ崘
--> 鍠滄 calls /api/netease/liked
--> 姝屽崟 calls /api/netease/playlists, then /api/netease/playlist?id=...
--> 姣忔棩鎺ㄨ崘 calls /api/netease/daily-recommend
+-> UI shows left-side Netease entry only when valid is true
+-> click Netease
+-> secondary menu offers Liked, Playlists, Daily Recommendations
+-> Liked calls /api/netease/liked
+-> Playlists calls /api/netease/playlists, then /api/netease/playlist?id=...
+-> Daily Recommendations calls /api/netease/daily-recommend
 -> proxy filters all song lists through playable URL checks
 -> user clicks a playable song
 -> loadNeteaseSong(song, currentCloudSongs) plays it with queue skip support
@@ -265,10 +265,11 @@ Runtime template file created by the local API. It is ignored by git as user-edi
 3. Modify the proxy endpoints in both `vite.config.ts` and `local-server.mjs`.
 4. Run `npx tsx src/lib/neteaseCookie.test.ts`, `npm run lint`, and `npm run build`.
 5. Restart `npm run dev` because Vite middleware changes require a server restart.
-6. Smoke test `PUT http://127.0.0.1:3000/api/netease/cookie`, then `http://127.0.0.1:3000/api/netease/search?keywords=imase&limit=3`; repeat once to verify the cached path.
-7. With a real valid Cookie, smoke test `http://127.0.0.1:3000/api/netease/liked?limit=3`, `http://127.0.0.1:3000/api/netease/playlists`, and `http://127.0.0.1:3000/api/netease/daily-recommend?limit=3`.
-8. In the browser, open Settings -> Netease Cookie, open the official website, copy/save a Cookie, verify the left-side Netease entry appears, open liked/playlists/daily recommendations, and verify each secondary menu lists playable songs.
-9. Click a song in each secondary menu to verify playback and queue skip support. Click the plus button on a cloud song and verify it appears in the local Favorites playlist after reload.
+6. Smoke test `http://127.0.0.1:3000/api/netease/search?keywords=imase&limit=3` without a Cookie; only anonymously playable songs should be returned, and empty results are acceptable for restricted keywords.
+7. Smoke test `PUT http://127.0.0.1:3000/api/netease/cookie`, then repeat the same `/api/netease/search` with a real valid Cookie; account/VIP playable songs may appear, but unplayable songs should still be filtered out. Repeat once to verify the cached path is Cookie-specific.
+8. With a real valid Cookie, smoke test `http://127.0.0.1:3000/api/netease/liked?limit=3`, `http://127.0.0.1:3000/api/netease/playlists`, and `http://127.0.0.1:3000/api/netease/daily-recommend?limit=3`.
+9. In the browser, open Settings -> Netease Cookie, open the official website, copy/save a Cookie, verify the left-side Netease entry appears, open liked/playlists/daily recommendations, and verify each secondary menu lists playable songs.
+10. Click a song in each secondary menu to verify playback and queue skip support. Click the plus button on a cloud song and verify it appears in the local Favorites playlist after reload.
 
 ### Change One-Click Startup
 
@@ -313,7 +314,7 @@ Runtime template file created by the local API. It is ignored by git as user-edi
 3. Modify visible spawn gating in `src/components/AudioVisualizer/MapScene.tsx` if Meteor spacing feels wrong.
 4. Modify panel controls in `src/components/UI/UI.tsx`.
 5. Run `npx tsx src/lib/triggerSettings.test.ts`, `npm run lint`, and `npm run build`.
-6. In the browser, open `璁剧疆`, choose `娴佹槦鐗规晥`, set `鍐峰嵈甯ф暟` to `300`, refresh, and verify the setting persists in the same browser.
+6. In the browser, open `Settings`, choose `Meteor`, set `Cooldown (frames)` to `300`, refresh, and verify the setting persists in the same browser.
 7. Verify visible Meteors are spaced about five seconds apart.
 
 ### Change Sonic City Template Zones
@@ -365,7 +366,7 @@ rg -n "TemplateCityScene|AdminPage|saveTemplateLibrary|sonic-city/templates" son
 - Search filters out songs without playback URLs. The proxy checks candidates in small concurrent batches and caches search/playability results to keep repeat searches faster.
 - Netease Cookie is stored in browser `localStorage` and synced to the local proxy runtime via `/api/netease/cookie`. Search/url/lyric/cloud/daily fetches can send `X-Netease-Cookie`, but audio playback relies on the server memory copy because the browser audio element cannot attach custom headers.
 - Netease login is manual Cookie only. The Settings panel can open `music.163.com`, but browser security prevents this app from automatically reading official-site Cookies.
-- The left-side `缃戞槗浜慲 entry appears only after `/api/netease/cookie` validates the Cookie. Invalid, expired, or logged-out Cookies should hide the entry and direct the user back to Settings.
+- The left-side Netease entry appears only after `/api/netease/cookie` validates the Cookie. Invalid, expired, or logged-out Cookies should hide the entry and direct the user back to Settings.
 - Cloud song plus buttons add songs to the local `Favorites` playlist, not to the upstream Netease account.
 - Pulse/Meteor trigger settings are browser-local via `sonic-topography-trigger-settings-v1`. They should persist across refreshes for the same browser but should not be written into packaged project files or shared with other users.
 - Saved playlists are file-backed in `data/playlists.json`; `data/` is ignored by git because it is user runtime data. Browser `localStorage` is kept as a fallback/migration source.

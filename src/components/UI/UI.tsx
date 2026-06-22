@@ -177,6 +177,15 @@ export function UI({ theme, onThemeChange }: UIProps) {
       const valid = Boolean(data.valid);
       setIsNeteaseCookieValid(valid);
       setCookieStatus(cookie.trim() ? (valid ? 'Cookie 可用，已开启网易云' : 'Cookie 已保存，但校验失败') : 'Cookie 已清除');
+      if (cookie.trim() && !valid) {
+        fetch('/api/netease/cookie', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cookie: '' }),
+        }).catch((error) => {
+          console.warn('Unable to clear invalid Netease proxy cookie:', error);
+        });
+      }
     } catch (error) {
       console.warn('Unable to sync Netease cookie:', error);
       setIsNeteaseCookieValid(false);
@@ -206,7 +215,7 @@ export function UI({ theme, onThemeChange }: UIProps) {
 
   const ensureNeteaseCookieReady = () => {
     if (!isNeteaseCookieValid) {
-      setNeteaseCloudStatus('璇峰厛鍦ㄨ缃噷淇濆瓨鍙敤鐨勭綉鏄撲簯 Cookie');
+      setNeteaseCloudStatus('请先在设置里保存可用的网易云 Cookie');
       setShowOptionsPanel(true);
       return false;
     }
@@ -218,7 +227,7 @@ export function UI({ theme, onThemeChange }: UIProps) {
     if (!ensureNeteaseCookieReady()) return;
 
     setIsLoadingNeteaseCloud(true);
-    setNeteaseCloudStatus('姝ｅ湪鍔犺浇...');
+    setNeteaseCloudStatus('正在加载...');
 
     try {
       const response = await fetch(url, {
@@ -244,7 +253,7 @@ export function UI({ theme, onThemeChange }: UIProps) {
       setNeteaseCloudStatus('');
     } catch (error) {
       console.warn('Unable to load Netease cloud songs:', error);
-      setNeteaseCloudStatus('鍔犺浇澶辫触');
+      setNeteaseCloudStatus('加载失败');
     } finally {
       setIsLoadingNeteaseCloud(false);
     }
@@ -253,13 +262,13 @@ export function UI({ theme, onThemeChange }: UIProps) {
   const loadDailyRecommendations = async () => {
     setNeteaseCloudTab('daily');
     setActiveNeteasePlaylistId(null);
-    await fetchNeteaseSongs('/api/netease/daily-recommend?limit=50', '姣忔棩鎺ㄨ崘閲屾殏鏃舵病鏈夊彲鎾斁姝屾洸');
+    await fetchNeteaseSongs('/api/netease/daily-recommend?limit=50', '每日推荐里暂时没有可播放歌曲');
   };
 
   const loadLikedSongs = async () => {
     setNeteaseCloudTab('liked');
     setActiveNeteasePlaylistId(null);
-    await fetchNeteaseSongs('/api/netease/liked?limit=50', '鍠滄鍒楄〃閲屾殏鏃舵病鏈夊彲鎾斁姝屾洸');
+    await fetchNeteaseSongs('/api/netease/liked?limit=50', '喜欢列表里暂时没有可播放歌曲');
   };
 
   const loadNeteasePlaylists = async () => {
@@ -269,7 +278,7 @@ export function UI({ theme, onThemeChange }: UIProps) {
     if (!ensureNeteaseCookieReady()) return;
 
     setIsLoadingNeteaseCloud(true);
-    setNeteaseCloudStatus('姝ｅ湪鍔犺浇姝屽崟...');
+    setNeteaseCloudStatus('正在加载歌单...');
 
     try {
       const response = await fetch('/api/netease/playlists', {
@@ -289,7 +298,7 @@ export function UI({ theme, onThemeChange }: UIProps) {
       setNeteaseCloudStatus(cloudPlaylists.length ? '请选择一个歌单' : '没有找到网易云歌单');
     } catch (error) {
       console.warn('Unable to load Netease playlists:', error);
-      setNeteaseCloudStatus('姝屽崟鍔犺浇澶辫触');
+      setNeteaseCloudStatus('歌单加载失败');
     } finally {
       setIsLoadingNeteaseCloud(false);
     }
@@ -297,7 +306,7 @@ export function UI({ theme, onThemeChange }: UIProps) {
 
   const loadNeteasePlaylistSongs = async (playlist: NeteasePlaylistSummary) => {
     setActiveNeteasePlaylistId(playlist.id);
-    await fetchNeteaseSongs(`/api/netease/playlist?id=${playlist.id}&limit=50`, '杩欎釜姝屽崟閲屾殏鏃舵病鏈夊彲鎾斁姝屾洸');
+    await fetchNeteaseSongs(`/api/netease/playlist?id=${playlist.id}&limit=50`, '这个歌单里暂时没有可播放歌曲');
   };
 
   useEffect(() => {
@@ -437,23 +446,26 @@ export function UI({ theme, onThemeChange }: UIProps) {
   const searchNetease = async () => {
     const keywords = searchQuery.trim();
     if (!keywords) return;
+    const requestCookie = isNeteaseCookieValid ? neteaseCookie : '';
 
     setIsSearching(true);
-    setSearchStatus('Searching...');
+    setSearchStatus('正在搜索可播放歌曲...');
     setSearchResults([]);
 
     try {
       const response = await fetch(`/api/netease/search?keywords=${encodeURIComponent(keywords)}&limit=30`, {
-        headers: createNeteaseCookieHeaders(neteaseCookie),
+        headers: createNeteaseCookieHeaders(requestCookie),
       });
       if (!response.ok) throw new Error('Search request failed');
 
       const data = await response.json();
       setSearchResults(data.songs || []);
-      setSearchStatus(data.songs?.length ? '' : 'No playable songs found');
+      setSearchStatus(data.songs?.length ? '' : (requestCookie
+        ? '当前账号也没有找到可播放歌曲，可能受版权、会员或地区限制。'
+        : '未登录时只显示可播放歌曲，可以保存网易云 Cookie 后搜到更多可播放歌曲。'));
     } catch (error) {
       console.warn('Netease search failed:', error);
-      setSearchStatus('Search failed');
+      setSearchStatus('搜索失败，请稍后再试');
     } finally {
       setIsSearching(false);
     }
@@ -464,15 +476,16 @@ export function UI({ theme, onThemeChange }: UIProps) {
     setCurrentSongId(song.id);
     setTrackName(`${song.artist ? `${song.artist} - ` : ''}${song.name}`);
     setLyricsText('');
-    setSearchStatus('Loading song...');
+    setSearchStatus('正在加载歌曲...');
+    const requestCookie = isNeteaseCookieValid ? neteaseCookie : '';
 
     try {
       const [urlResponse, lyricResponse] = await Promise.all([
         fetch(`/api/netease/url?id=${song.id}`, {
-          headers: createNeteaseCookieHeaders(neteaseCookie),
+          headers: createNeteaseCookieHeaders(requestCookie),
         }),
         fetch(`/api/netease/lyric?id=${song.id}`, {
-          headers: createNeteaseCookieHeaders(neteaseCookie),
+          headers: createNeteaseCookieHeaders(requestCookie),
         }),
       ]);
 
@@ -482,7 +495,7 @@ export function UI({ theme, onThemeChange }: UIProps) {
       setLyricsText(lyric);
 
       if (!urlData.url) {
-        setSearchStatus('Song unavailable, skipping...');
+        setSearchStatus('这首歌可能需要 Cookie、会员或地区权限，正在尝试下一首...');
         playFromQueue(1, song.id);
         return;
       }
@@ -494,7 +507,7 @@ export function UI({ theme, onThemeChange }: UIProps) {
       setShowSearchPanel(false);
     } catch (error) {
       console.warn('Unable to load Netease song:', error);
-      setSearchStatus('Load failed, skipping...');
+      setSearchStatus('加载失败，正在尝试下一首...');
       playFromQueue(1, song.id);
     }
   };
@@ -538,7 +551,7 @@ export function UI({ theme, onThemeChange }: UIProps) {
       return { ...playlist, songs: [...playlist.songs, song] };
     }));
     const playlistName = playlists.find((playlist) => playlist.id === playlistId)?.name || 'playlist';
-    setSearchStatus(`Added to ${playlistName}`);
+    setSearchStatus(`已加入 ${playlistName}`);
     setSongToAdd(null);
   };
 
@@ -560,7 +573,7 @@ export function UI({ theme, onThemeChange }: UIProps) {
     const id = `playlist-${Date.now()}`;
     setPlaylists((current) => [...current, { id, name, songs: [songToAdd] }]);
     setActivePlaylistId(id);
-    setSearchStatus(`Added to ${name}`);
+    setSearchStatus(`已加入 ${name}`);
     setSongToAdd(null);
     setNewPlaylistName('');
   };
@@ -681,7 +694,7 @@ export function UI({ theme, onThemeChange }: UIProps) {
         <aside className={`side-nav-panel absolute left-0 top-0 w-[60px] h-full border-r border-white/5 flex flex-col items-center py-6 pointer-events-auto ${isMobileSideNavOpen ? 'translate-x-0' : '-translate-x-full'} group-hover:translate-x-0 transition-transform duration-300`} style={{ background: 'rgba(2,4,10,0.8)' }}>
           <button className="uppercase tracking-[0.2em] text-[10px] mb-12 opacity-100 transition-opacity cursor-pointer" style={{ writingMode: 'vertical-rl', color: accentHex }}>Visualizer</button>
           <button onClick={() => { setShowOptionsPanel(true); setIsMobileSideNavOpen(false); }} className="uppercase tracking-[0.2em] text-[10px] mb-12 opacity-40 hover:opacity-100 transition-opacity cursor-pointer flex items-center justify-center gap-2" style={{ writingMode: 'vertical-rl' }}>
-            璁剧疆
+            设置
           </button>
           <button onClick={() => { setShowSearchPanel(true); setIsMobileSideNavOpen(false); }} className="uppercase tracking-[0.2em] text-[10px] mb-12 opacity-40 hover:opacity-100 transition-opacity cursor-pointer flex items-center justify-center gap-2" style={{ writingMode: 'vertical-rl' }}>
             Search
@@ -696,7 +709,8 @@ export function UI({ theme, onThemeChange }: UIProps) {
               className="uppercase tracking-[0.2em] text-[10px] mb-12 opacity-40 hover:opacity-100 transition-opacity cursor-pointer flex items-center justify-center gap-2"
               style={{ writingMode: 'vertical-rl' }}
             >
-              缃戞槗浜?            </button>
+              网易云
+            </button>
           )}
           <button onClick={() => { setShowPlaylistPanel(true); setIsMobileSideNavOpen(false); }} className="uppercase tracking-[0.2em] text-[10px] mb-12 opacity-40 hover:opacity-100 transition-opacity cursor-pointer flex items-center justify-center gap-2" style={{ writingMode: 'vertical-rl' }}>
             Playlist
@@ -820,7 +834,7 @@ export function UI({ theme, onThemeChange }: UIProps) {
                 >
                   <Plus size={15} />
                 </span>
-                <div className="mt-1 text-[11px] text-white/45 truncate">{song.artist || 'Unknown artist'} 路 {song.album || 'Unknown album'}</div>
+                <div className="mt-1 text-[11px] text-white/45 truncate">{song.artist || 'Unknown artist'} - {song.album || 'Unknown album'}</div>
               </button>
             ))}
           </div>
@@ -950,7 +964,7 @@ export function UI({ theme, onThemeChange }: UIProps) {
           <div className="p-5 border-b border-white/10">
             <div className="flex items-center justify-between mb-4">
               <div className="text-[12px] uppercase tracking-[0.2em] text-white/70">网易云</div>
-              <button onClick={() => setShowNeteasePanel(false)} className="text-[10px] uppercase tracking-[0.15em] text-white/40 hover:text-white">鍏抽棴</button>
+              <button onClick={() => setShowNeteasePanel(false)} className="text-[10px] uppercase tracking-[0.15em] text-white/40 hover:text-white">关闭</button>
             </div>
             <div className="flex gap-2">
               <button
@@ -958,21 +972,21 @@ export function UI({ theme, onThemeChange }: UIProps) {
                 className={`px-3 py-2 rounded-sm border text-[10px] uppercase tracking-[0.12em] transition-colors ${neteaseCloudTab === 'liked' ? 'text-black border-transparent' : 'text-white/45 border-white/10 hover:text-white'}`}
                 style={{ backgroundColor: neteaseCloudTab === 'liked' ? accentHex : 'transparent' }}
               >
-                鍠滄
+                喜欢
               </button>
               <button
                 onClick={loadNeteasePlaylists}
                 className={`px-3 py-2 rounded-sm border text-[10px] uppercase tracking-[0.12em] transition-colors ${neteaseCloudTab === 'playlists' ? 'text-black border-transparent' : 'text-white/45 border-white/10 hover:text-white'}`}
                 style={{ backgroundColor: neteaseCloudTab === 'playlists' ? accentHex : 'transparent' }}
               >
-                姝屽崟
+                歌单
               </button>
               <button
                 onClick={loadDailyRecommendations}
                 className={`px-3 py-2 rounded-sm border text-[10px] uppercase tracking-[0.12em] transition-colors ${neteaseCloudTab === 'daily' ? 'text-black border-transparent' : 'text-white/45 border-white/10 hover:text-white'}`}
                 style={{ backgroundColor: neteaseCloudTab === 'daily' ? accentHex : 'transparent' }}
               >
-                姣忔棩鎺ㄨ崘
+                每日推荐
               </button>
             </div>
           </div>
@@ -989,7 +1003,7 @@ export function UI({ theme, onThemeChange }: UIProps) {
                   <span className="text-[10px] text-white/35">{playlist.trackCount}</span>
                 </button>
               )) : (
-                <div className="px-3 py-4 text-[12px] text-white/40">{isLoadingNeteaseCloud ? '姝ｅ湪鍔犺浇姝屽崟...' : '鐐瑰嚮鈥滄瓕鍗曗€濆姞杞戒綘鐨勭綉鏄撲簯姝屽崟'}</div>
+                <div className="px-3 py-4 text-[12px] text-white/40">{isLoadingNeteaseCloud ? '正在加载歌单...' : '点击“歌单”加载你的网易云歌单'}</div>
               )}
             </div>
           )}
@@ -1001,7 +1015,7 @@ export function UI({ theme, onThemeChange }: UIProps) {
             queue={neteaseCloudSongs}
             onPlay={loadNeteaseSong}
             onFavorite={addSongToFavorites}
-            emptyText={isLoadingNeteaseCloud ? '姝ｅ湪鍔犺浇...' : '杩欓噷浼氭樉绀哄彲鎾斁姝屾洸'}
+            emptyText={isLoadingNeteaseCloud ? '正在加载...' : '这里会显示可播放歌曲'}
           />
         </div>
       )}
@@ -1157,7 +1171,7 @@ export function UI({ theme, onThemeChange }: UIProps) {
                 title="Upload .lrc file"
              >
                 <div className="w-1.5 h-1.5 rounded-full bg-red-500/50"></div>
-                No Lyrics 鈥?Click to upload .lrc
+                No Lyrics - Click to upload .lrc
              </div>
           )}
           <div className="mobile-hide-aux-ui">
@@ -1167,7 +1181,7 @@ export function UI({ theme, onThemeChange }: UIProps) {
       )}
 
       <div className="mobile-hide-aux-ui absolute bottom-[40px] right-[40px] text-[10px] uppercase tracking-[0.1em] opacity-30 select-none">
-        Drag to orbit 鈥?Click to pulse
+        Drag to orbit - Click to pulse
       </div>
       {/* Options Panel */}
       {showOptionsPanel && (
@@ -1227,11 +1241,11 @@ function NeteaseSongList({
               }
             }}
             className="absolute right-5 top-1/2 -translate-y-1/2 h-8 w-8 rounded-sm border border-white/10 text-white/55 hover:text-black hover:border-transparent transition-colors flex items-center justify-center"
-            title="鍔犲叆鍠滄"
+            title="加入喜欢"
           >
             <Plus size={15} />
           </span>
-          <div className="mt-1 text-[11px] text-white/45 truncate">{song.artist || '鏈煡姝屾墜'} - {song.album || '鏈煡涓撹緫'}</div>
+          <div className="mt-1 text-[11px] text-white/45 truncate">{song.artist || '未知歌手'} - {song.album || '未知专辑'}</div>
         </button>
       )) : (
         <div className="px-5 py-8 text-[12px] text-white/40">{emptyText}</div>
@@ -1262,9 +1276,9 @@ function OptionsPanel({
   const [activeTab, setActiveTab] = useState<OptionsTab>('Meteor');
   const tabs: OptionsTab[] = ['Pulse', 'Meteor', 'Cookie'];
   const tabLabels: Record<OptionsTab, string> = {
-    Pulse: '鑴夊啿鐗规晥',
-    Meteor: '娴佹槦鐗规晥',
-    Cookie: '缃戞槗浜?Cookie',
+    Pulse: '脉冲特效',
+    Meteor: '流星特效',
+    Cookie: '网易云 Cookie',
   };
 
   return (
@@ -1272,10 +1286,10 @@ function OptionsPanel({
        <div className="w-[80vw] max-w-[840px] max-h-[86vh] overflow-y-auto border border-white/10 rounded-sm p-8 transform transition-all shadow-2xl" style={{ background: 'rgba(5, 10, 15, 0.95)' }}>
           <div className="flex justify-between items-center mb-6">
              <div>
-               <div className="text-xl font-light tracking-widest text-white">璁剧疆</div>
-               <div className="mt-2 text-[10px] uppercase tracking-[0.18em] text-white/35">瑙嗚瑙﹀彂鍣ㄤ笌缃戞槗浜戠櫥褰?Cookie</div>
+               <div className="text-xl font-light tracking-widest text-white">设置</div>
+               <div className="mt-2 text-[10px] uppercase tracking-[0.18em] text-white/35">视觉触发器与网易云 Cookie</div>
              </div>
-             <button onClick={onClose} className="text-white/50 hover:text-white uppercase tracking-widest text-[10px]">鍏抽棴</button>
+             <button onClick={onClose} className="text-white/50 hover:text-white uppercase tracking-widest text-[10px]">关闭</button>
           </div>
 
           <div className="flex gap-2 mb-6">
@@ -1442,10 +1456,10 @@ function FreqTriggerPanel({ action, accentHex }: { action: 'Pulse' | 'Meteor', a
 
   const presets: TriggerPreset[] = ['Auto Beat', 'Advanced'];
   const modeLabels: Record<TriggerPreset, string> = {
-    'Auto Beat': '鑷姩鑺傛媿',
-    Advanced: '楂樼骇妯″紡',
+    'Auto Beat': '自动节拍',
+    Advanced: '高级模式',
   };
-  const actionLabel = action === 'Pulse' ? '鑴夊啿鐗规晥' : '娴佹槦鐗规晥';
+  const actionLabel = action === 'Pulse' ? '脉冲特效' : '流星特效';
 
   useEffect(() => {
     let animationId: number;
@@ -1592,7 +1606,7 @@ function FreqTriggerPanel({ action, accentHex }: { action: 'Pulse' | 'Meteor', a
                  className="w-4 h-4 rounded-sm border-white/20 bg-black/50"
                  style={{ accentColor: accentHex }}
                />
-               <span className="text-[10px] uppercase tracking-widest text-white/50">鍚敤</span>
+               <span className="text-[10px] uppercase tracking-widest text-white/50">启用</span>
              </label>
           </div>
           
@@ -1639,14 +1653,14 @@ function FreqTriggerPanel({ action, accentHex }: { action: 'Pulse' | 'Meteor', a
                </div>
                <div className="flex flex-col gap-2">
                  <div className="flex justify-between uppercase tracking-widest text-[10px] text-white/50">
-                    <span>鍐峰嵈甯ф暟</span>
+                    <span>冷却帧数</span>
                     <span style={{ color: accentHex }}>{cooldown}</span>
                  </div>
                  <input type="range" min="0" max="300" step="1" value={cooldown} onChange={e => setCooldown(parseInt(e.target.value))} className="w-full accent-current h-1" style={{ accentColor: accentHex }}/>
                </div>
                <div className="flex flex-col gap-2">
                  <div className="flex justify-between uppercase tracking-widest text-[10px] text-white/50">
-                    <span>瑙﹀彂棰戞 ({bandStart} - {bandEnd})</span>
+                    <span>触发频段 ({bandStart} - {bandEnd})</span>
                  </div>
                  <div className="flex gap-2">
                    <input type="range" min="0" max="250" step="1" value={bandStart} onChange={e => setBandStart(Math.min(parseInt(e.target.value), bandEnd - 1))} className="w-1/2 accent-current h-1" style={{ accentColor: accentHex }}/>
@@ -1655,7 +1669,7 @@ function FreqTriggerPanel({ action, accentHex }: { action: 'Pulse' | 'Meteor', a
                </div>
                <div className="flex flex-col gap-2">
                  <div className="flex justify-between uppercase tracking-widest text-[10px] text-white/50">
-                    <span>鐗规晥寮哄害</span>
+                    <span>特效强度</span>
                     <span style={{ color: accentHex }}>{pulseStrength.toFixed(2)}</span>
                  </div>
                  <input type="range" min="0" max="5" step="0.1" value={pulseStrength} onChange={e => setPulseStrength(parseFloat(e.target.value))} className="w-full accent-current h-1" style={{ accentColor: accentHex }}/>
