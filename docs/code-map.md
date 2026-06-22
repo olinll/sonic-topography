@@ -61,23 +61,20 @@ Settings -> Netease Cookie -> open music.163.com and copy a browser Cookie manua
 -> PUT /api/netease/cookie syncs Cookie to the local proxy memory for audio tag requests
 -> UI Search button
 -> UI.searchNetease()
--> request includes X-Netease-Cookie when a browser Cookie is saved
+-> request includes X-Netease-Cookie only after the browser Cookie validates
 -> Vite middleware /api/netease/search
--> proxy converts the browser Cookie into an upstream Cookie header
--> search cache returns if the same keyword/limit was recently checked
--> music.163.com search API
--> primary search API and cloudsearch fallback are merged by song id
--> upstream search and playable-url checks retry transient 400 responses
--> upstream search limit is capped at 80 because some Netease keywords return code 400 at limit 120
--> Vite checks each candidate with /api/song/enhance/player/url
+-> no Cookie: use the GitHub baseline anonymous search path from e3b8c83
+-> anonymous path defaults to limit=12, caps resultLimit at 20, and calls only music.163.com/api/search/get/web with upstream limit min(resultLimit * 3, 60)
+-> valid Cookie: use account-aware search with official Cookie, cloudsearch fallback, transient 400 retries, and upstream limit capped at 80
+-> Vite checks each candidate with /api/song/enhance/player/url using the same anonymous/account permission context
 -> playable URL cache avoids repeated candidate checks
 -> unplayable candidates are filtered out
 -> response includes rawCount and filteredCount so the UI can distinguish "no songs found" from "songs found but none playable"
 -> rawCount=0 results are not cached, because anonymous upstream search can occasionally return empty responses
 -> user selects a result
 -> /api/netease/lyric loads LRC
--> /api/netease/url checks playback availability
--> /api/netease/audio proxies playable audio into AudioEngine.loadUrl()
+-> /api/netease/url checks playback availability using anonymous mode when no validated Cookie is sent, or account mode when it is sent
+-> /api/netease/audio proxies playable audio into AudioEngine.loadUrl() with the same permission context
 ```
 
 Netease cloud library flow:
@@ -270,8 +267,8 @@ Runtime template file created by the local API. It is ignored by git as user-edi
 3. Modify the proxy endpoints in both `vite.config.ts` and `local-server.mjs`.
 4. Run `npx tsx src/lib/neteaseCookie.test.ts`, `npm run lint`, and `npm run build`.
 5. Restart `npm run dev` because Vite middleware changes require a server restart.
-6. Smoke test `http://127.0.0.1:3000/api/netease/search?keywords=tyler&limit=3` without a Cookie; only anonymously playable songs should be returned. If the payload has `rawCount > 0` and `songs: []`, the UI should say songs were found but none are playable anonymously.
-7. Smoke test `PUT http://127.0.0.1:3000/api/netease/cookie`, then repeat the same `/api/netease/search` with a real valid Cookie; account/VIP playable songs may appear, but unplayable songs should still be filtered out. Repeat once to verify the cached path is Cookie-specific.
+6. Smoke test `http://127.0.0.1:3000/api/netease/search?keywords=tyler` without a Cookie; behavior should match GitHub `e3b8c83`: anonymous search uses `search/get/web`, default limit 12, max resultLimit 20, upstream limit min(resultLimit * 3, 60), then filters by anonymous playable URLs.
+7. Smoke test `PUT http://127.0.0.1:3000/api/netease/cookie`, then repeat the same `/api/netease/search` with a real valid Cookie; account/VIP playable songs may appear, but unplayable songs should still be filtered out. Repeat once to verify anonymous cache and Cookie cache do not mix.
 8. With a real valid Cookie, smoke test `http://127.0.0.1:3000/api/netease/liked?limit=3`, `http://127.0.0.1:3000/api/netease/playlists`, and `http://127.0.0.1:3000/api/netease/daily-recommend?limit=3`.
 9. In the browser, open Settings -> Netease Cookie, open the official website, copy/save a Cookie, verify the left-side Netease entry appears, open liked/playlists/daily recommendations, and verify each secondary menu lists playable songs.
 10. Click a song in each secondary menu to verify playback and queue skip support. Click the plus button on a cloud song and verify it appears in the local Favorites playlist after reload.

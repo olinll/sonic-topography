@@ -157,6 +157,27 @@ async function fetchNeteaseSearchSongs(keywords: string, resultLimit: number, co
   };
 }
 
+async function fetchAnonymousNeteaseSearchSongs(keywords: string, resultLimit: number) {
+  const body = new URLSearchParams({
+    s: keywords,
+    type: '1',
+    offset: '0',
+    total: 'true',
+    limit: String(Math.min(resultLimit * 3, 60)),
+  });
+
+  const response = await fetch('https://music.163.com/api/search/get/web', {
+    method: 'POST',
+    headers: {
+      ...neteaseHeaders,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body,
+  });
+  const data = await response.json() as any;
+  return data?.result?.songs || [];
+}
+
 function readNeteaseCookie(req: any) {
   const raw = req.headers?.[NETEASE_COOKIE_HEADER.toLowerCase()];
   const headerCookie = Array.isArray(raw) ? raw[0] : String(raw || '');
@@ -288,8 +309,11 @@ function neteaseApiPlugin() {
           const requestUrl = new URL(req.url || '', 'http://localhost');
           const keywords = requestUrl.searchParams.get('keywords')?.trim();
           const requestedLimit = Number(requestUrl.searchParams.get('limit') || '30');
-          const resultLimit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(requestedLimit, 40)) : 30;
           const cookie = readNeteaseCookie(req);
+          const hasCookie = Boolean(normalizeNeteaseCookie(cookie));
+          const resultLimit = hasCookie
+            ? (Number.isFinite(requestedLimit) ? Math.max(1, Math.min(requestedLimit, 40)) : 30)
+            : (Number.isFinite(requestedLimit) ? Math.max(1, Math.min(requestedLimit, 20)) : 12);
           const includeDebug = requestUrl.searchParams.get('debug') === '1';
 
           if (!keywords) {
@@ -304,7 +328,9 @@ function neteaseApiPlugin() {
             return;
           }
 
-          const searchResult = await fetchNeteaseSearchSongs(keywords, resultLimit, cookie);
+          const searchResult = hasCookie
+            ? await fetchNeteaseSearchSongs(keywords, resultLimit, cookie)
+            : { songs: await fetchAnonymousNeteaseSearchSongs(keywords, resultLimit), debug: { mode: 'anonymous-github' } };
           const rawSongs = searchResult.songs.map(mapNeteaseSong);
           const songs = await filterPlayableSongs(rawSongs, resultLimit, cookie);
           const payload = { songs, rawCount: rawSongs.length, filteredCount: songs.length };
