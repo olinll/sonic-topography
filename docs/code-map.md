@@ -159,15 +159,16 @@ src/lib/themes.ts defines the four built-in themes and keeps their exact color v
 -> custom theme presets read browser localStorage key sonic-topography-custom-themes-v2
 -> active custom preset id persists in browser localStorage key sonic-topography-active-custom-theme-v1
 -> custom presets use background/cool/warm/accent colors plus glow intensity
--> custom presets also store auto-rotation speed; built-in themes keep their original 0.5 speed
--> custom presets can hide or show the player panel's top-right theme button; built-in themes keep it visible
+-> the selected custom preset stores page auto-rotation speed and player panel visibility
+-> those two controls apply immediately even while a built-in color theme is active
 -> the player palette button cycles through the built-in themes plus the active custom preset
 -> optional theme rotation settings persist in browser localStorage key sonic-topography-theme-rotation-v1
 -> rotation can include any built-in theme plus any saved custom preset, with a user-selected interval
 -> createCustomThemeColors() derives the shader colors from those simple controls
 -> App passes resolvedTheme to UI and MapScene
 -> UI uses resolvedTheme.uRippleColor as the accent for buttons, sliders, progress, lyrics, stats, Pulse controls, and Meteor controls
--> MapScene lerps shader uniforms and meteor color toward resolvedTheme, and passes resolvedTheme.uRotationSpeed to OrbitControls autoRotateSpeed
+-> App passes selected custom preset rotation speed to MapScene OrbitControls autoRotateSpeed
+-> MapScene lerps shader uniforms and meteor color toward resolvedTheme
 ```
 
 Wallpaper Engine flow:

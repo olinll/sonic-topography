@@ -9,7 +9,7 @@ export interface CustomThemeSettings {
   accent: string;
   glowIntensity: number;
   rotationSpeed: number;
-  showThemeButton: boolean;
+  showPlayerPanel: boolean;
 }
 
 export interface ThemeColors {
@@ -24,7 +24,7 @@ export interface ThemeColors {
   uRippleColor: THREE.Color;
   uGlowIntensity: number;
   uRotationSpeed: number;
-  uShowThemeButton: boolean;
+  uShowPlayerPanel: boolean;
 }
 
 export interface ThemeRotationSettings {
@@ -50,7 +50,7 @@ export const defaultCustomThemeSettings: CustomThemeSettings = {
   accent: '#22d3ee',
   glowIntensity: 1.1,
   rotationSpeed: 0.5,
-  showThemeButton: true,
+  showPlayerPanel: true,
 };
 
 export const defaultThemeRotationSettings: ThemeRotationSettings = {
@@ -83,6 +83,7 @@ function clampRotationInterval(value: unknown) {
 }
 
 export function normalizeCustomThemeSettings(value: Partial<CustomThemeSettings> | null | undefined): CustomThemeSettings {
+  const legacyValue = value as (Partial<CustomThemeSettings> & { showThemeButton?: unknown }) | null | undefined;
   return {
     id: String(value?.id || defaultCustomThemeSettings.id),
     name: String(value?.name || defaultCustomThemeSettings.name).trim() || defaultCustomThemeSettings.name,
@@ -92,7 +93,9 @@ export function normalizeCustomThemeSettings(value: Partial<CustomThemeSettings>
     accent: normalizeHexColor(value?.accent, defaultCustomThemeSettings.accent),
     glowIntensity: clampGlowIntensity(value?.glowIntensity),
     rotationSpeed: clampSceneRotationSpeed(value?.rotationSpeed),
-    showThemeButton: value?.showThemeButton === undefined ? defaultCustomThemeSettings.showThemeButton : Boolean(value.showThemeButton),
+    showPlayerPanel: value?.showPlayerPanel === undefined
+      ? (legacyValue?.showThemeButton === undefined ? defaultCustomThemeSettings.showPlayerPanel : Boolean(legacyValue.showThemeButton))
+      : Boolean(value.showPlayerPanel),
   };
 }
 
@@ -209,7 +212,7 @@ export function createCustomThemeColors(settings: CustomThemeSettings): ThemeCol
     uRippleColor: new THREE.Color(normalized.accent),
     uGlowIntensity: normalized.glowIntensity,
     uRotationSpeed: normalized.rotationSpeed,
-    uShowThemeButton: normalized.showThemeButton,
+    uShowPlayerPanel: normalized.showPlayerPanel,
   };
 }
 
@@ -226,7 +229,7 @@ export const themes: Record<string, ThemeColors> = {
     uRippleColor: new THREE.Color(0.2, 0.9, 1.0),
     uGlowIntensity: 1.0,
     uRotationSpeed: 0.5,
-    uShowThemeButton: true,
+    uShowPlayerPanel: true,
   },
   'neon-tokyo': {
     name: 'Neon Tokyo',
@@ -240,7 +243,7 @@ export const themes: Record<string, ThemeColors> = {
     uRippleColor: new THREE.Color(1.0, 1.0, 1.0),
     uGlowIntensity: 1.5,
     uRotationSpeed: 0.5,
-    uShowThemeButton: true,
+    uShowPlayerPanel: true,
   },
   'cyber-forest': {
     name: 'Cyber Forest',
@@ -254,7 +257,7 @@ export const themes: Record<string, ThemeColors> = {
     uRippleColor: new THREE.Color(0.6, 1.0, 0.3),
     uGlowIntensity: 1.3,
     uRotationSpeed: 0.5,
-    uShowThemeButton: true,
+    uShowPlayerPanel: true,
   },
   'minimal-monochrome': {
     name: 'Minimal Monochrome',
@@ -268,6 +271,6 @@ export const themes: Record<string, ThemeColors> = {
     uRippleColor: new THREE.Color(1.0, 1.0, 1.0),
     uGlowIntensity: 0.8,
     uRotationSpeed: 0.5,
-    uShowThemeButton: true,
+    uShowPlayerPanel: true,
   }
 };

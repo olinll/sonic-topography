@@ -29,6 +29,7 @@ interface UIProps {
   activeCustomThemeId: string;
   themeRotation: ThemeRotationSettings;
   groundEqSettings: StoredGroundEqSettings;
+  showPlayerPanel: boolean;
   onThemeChange: (theme: string) => void;
   onCustomThemesChange: (settings: CustomThemeSettings[], activeId?: string) => void;
   onThemeRotationChange: (settings: ThemeRotationSettings) => void;
@@ -129,7 +130,7 @@ function loadStoredTriggerSettings() {
 
 loadStoredTriggerSettings();
 
-export function UI({ theme, resolvedTheme, customThemes, activeCustomThemeId, themeRotation, groundEqSettings, onThemeChange, onCustomThemesChange, onThemeRotationChange, onGroundEqSettingsChange }: UIProps) {
+export function UI({ theme, resolvedTheme, customThemes, activeCustomThemeId, themeRotation, groundEqSettings, showPlayerPanel, onThemeChange, onCustomThemesChange, onThemeRotationChange, onGroundEqSettingsChange }: UIProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const demoAudioUrl = `${baseUrl}demo.mp3`;
   const demoLyricsUrl = `${baseUrl}demo.lrc`;
@@ -1148,27 +1149,25 @@ export function UI({ theme, resolvedTheme, customThemes, activeCustomThemeId, th
       )}
 
       {/* Player Panel */}
-      {trackName !== 'No track selected' && (
+      {showPlayerPanel && trackName !== 'No track selected' && (
         <div className="player-panel absolute top-[30px] right-[30px] w-[280px] px-5 py-4 rounded-sm z-50 pointer-events-auto backdrop-blur-[20px] border border-white/10" style={{ background: 'rgba(255,255,255,0.03)' }}>
           <div className="player-panel-header flex justify-between items-start">
             <div className="player-panel-title text-[17px] leading-6 font-light tracking-[0.05em] text-white truncate" title={trackName}>
               {trackName}
             </div>
-            {resolvedTheme.uShowThemeButton && (
-              <button 
-                onClick={() => {
-                  const keys = Object.keys(themes);
-                  const themeKeys = [...keys, CUSTOM_THEME_ID];
-                  const currentIndex = themeKeys.indexOf(theme);
-                  const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % themeKeys.length : 0;
-                  onThemeChange(themeKeys[nextIndex]);
-                }}
-                className="player-panel-theme text-white/40 hover:text-white transition-colors"
-                title="切换主题"
-              >
-                <Palette size={16} />
-              </button>
-            )}
+            <button 
+              onClick={() => {
+                const keys = Object.keys(themes);
+                const themeKeys = [...keys, CUSTOM_THEME_ID];
+                const currentIndex = themeKeys.indexOf(theme);
+                const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % themeKeys.length : 0;
+                onThemeChange(themeKeys[nextIndex]);
+              }}
+              className="player-panel-theme text-white/40 hover:text-white transition-colors"
+              title="切换主题"
+            >
+              <Palette size={16} />
+            </button>
           </div>
           <div className="player-panel-meta text-[11px] leading-4 opacity-50 uppercase mb-3 tracking-wider">
              {isCapturing ? 'System Audio Capture' : 'Local Audio'}
@@ -1878,17 +1877,17 @@ function CustomColorPanel({
 
       <div className="flex items-center justify-between gap-4 rounded-sm border border-white/10 bg-black/20 px-4 py-3">
         <div>
-          <div className="text-[12px] text-white/75">显示主题按钮</div>
-          <div className="mt-1 text-[10px] text-white/35">控制播放器右上角的调色盘图标是否显示</div>
+          <div className="text-[12px] text-white/75">显示播放器卡片</div>
+          <div className="mt-1 text-[10px] text-white/35">控制右上角播放卡片、歌名、进度和切歌按钮是否显示</div>
         </div>
         <button
-          onClick={() => updateCustomTheme({ showThemeButton: !activePreset.showThemeButton })}
+          onClick={() => updateCustomTheme({ showPlayerPanel: !activePreset.showPlayerPanel })}
           className={`shrink-0 px-3 py-2 rounded-sm border text-[10px] uppercase tracking-[0.15em] transition-colors ${
-            activePreset.showThemeButton ? 'text-black border-transparent' : 'border-white/10 text-white/45 hover:text-white'
+            activePreset.showPlayerPanel ? 'text-black border-transparent' : 'border-white/10 text-white/45 hover:text-white'
           }`}
-          style={{ backgroundColor: activePreset.showThemeButton ? accentHex : 'transparent' }}
+          style={{ backgroundColor: activePreset.showPlayerPanel ? accentHex : 'transparent' }}
         >
-          {activePreset.showThemeButton ? '显示' : '隐藏'}
+          {activePreset.showPlayerPanel ? '显示' : '隐藏'}
         </button>
       </div>
 

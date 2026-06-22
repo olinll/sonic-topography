@@ -12,9 +12,11 @@ extend({ MapShaderMaterial });
 export function MapScene({
   themeColors = themes['nocturnal'],
   groundEqSettings = readGroundEqSettingsStorage(),
+  rotationSpeed = themeColors.uRotationSpeed,
 }: {
   themeColors?: ThemeColors;
   groundEqSettings?: StoredGroundEqSettings;
+  rotationSpeed?: number;
 }) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const materialRef = useRef<any>(null);
@@ -309,7 +311,7 @@ export function MapScene({
       <OrbitControls 
         makeDefault 
         autoRotate 
-        autoRotateSpeed={themeColors.uRotationSpeed}
+        autoRotateSpeed={rotationSpeed}
         enablePan={false}
         touches={{
           ONE: THREE.TOUCH.ROTATE,

@@ -38,6 +38,8 @@ export default function App() {
   const availableRotationThemeIds = [...BUILT_IN_THEME_IDS, ...customThemes.map((preset) => preset.id)];
   const [themeRotation, setThemeRotation] = useState<ThemeRotationSettings>(() => readThemeRotationStorage(availableRotationThemeIds));
   const resolvedTheme = theme === CUSTOM_THEME_ID ? createCustomThemeColors(activeCustomTheme) : (themes[theme] || themes['nocturnal']);
+  const sceneRotationSpeed = activeCustomTheme?.rotationSpeed ?? resolvedTheme.uRotationSpeed;
+  const showPlayerPanel = activeCustomTheme?.showPlayerPanel ?? resolvedTheme.uShowPlayerPanel;
 
   const updateTheme = (themeId: string) => {
     setTheme(themeId);
@@ -107,6 +109,7 @@ export default function App() {
         activeCustomThemeId={activeCustomThemeId}
         themeRotation={themeRotation}
         groundEqSettings={groundEqSettings}
+        showPlayerPanel={showPlayerPanel}
         onThemeChange={updateTheme}
         onCustomThemesChange={updateCustomThemes}
         onThemeRotationChange={updateThemeRotation}
@@ -114,7 +117,7 @@ export default function App() {
       />
       <div className="absolute inset-0 z-0">
         <Canvas camera={{ position: [35, 25, 35], fov: 45 }}>
-          <MapScene themeColors={resolvedTheme} groundEqSettings={groundEqSettings} />
+          <MapScene themeColors={resolvedTheme} groundEqSettings={groundEqSettings} rotationSpeed={sceneRotationSpeed} />
         </Canvas>
       </div>
     </div>
