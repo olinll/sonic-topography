@@ -1,5 +1,5 @@
 ﻿import React, { useRef, useState, useEffect } from 'react';
-import { Play, Pause, Volume2, SkipForward, SkipBack, Palette, Plus, ListMusic, Shuffle, Repeat, Trash2, Menu, X } from 'lucide-react';
+import { Play, Pause, Volume2, SkipForward, SkipBack, Palette, Plus, ListMusic, Shuffle, Repeat, Trash2 } from 'lucide-react';
 import { engine } from '../../lib/AudioEngine';
 import { BUILT_IN_THEME_IDS, CUSTOM_THEME_ID, createCustomThemePreset, themes, type CustomThemeSettings, type ThemeColors, type ThemeRotationSettings } from '../../lib/themes';
 import {
@@ -169,6 +169,7 @@ export function UI({ theme, resolvedTheme, customThemes, activeCustomThemeId, th
   const [isNeteaseCookieValid, setIsNeteaseCookieValid] = useState(false);
   const [isSyncingNeteaseCookie, setIsSyncingNeteaseCookie] = useState(false);
   const [isMobileSideNavOpen, setIsMobileSideNavOpen] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const hasLoadedPlaylistsRef = useRef(false);
 
   const closeFloatingPanels = () => {
@@ -450,6 +451,30 @@ export function UI({ theme, resolvedTheme, customThemes, activeCustomThemeId, th
     
     return () => cancelAnimationFrame(animationFrameId);
   }, []);
+
+  useEffect(() => {
+    const syncFullscreenState = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement));
+    };
+
+    syncFullscreenState();
+    document.addEventListener('fullscreenchange', syncFullscreenState);
+    return () => document.removeEventListener('fullscreenchange', syncFullscreenState);
+  }, []);
+
+  const toggleFullscreen = async () => {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else {
+        await document.documentElement.requestFullscreen();
+      }
+    } catch (error) {
+      console.warn('Unable to toggle fullscreen:', error);
+    } finally {
+      setIsMobileSideNavOpen(false);
+    }
+  };
 
   const processFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -791,15 +816,27 @@ export function UI({ theme, resolvedTheme, customThemes, activeCustomThemeId, th
         </div>
       )}
       
+      {isMobileSideNavOpen && (
+        <button
+          type="button"
+          aria-label="关闭侧边栏"
+          className="absolute inset-0 z-[55] cursor-default pointer-events-auto"
+          onClick={() => setIsMobileSideNavOpen(false)}
+        />
+      )}
+
       {/* Sidebar Left */}
-      <div className={`side-nav-trigger absolute left-0 top-0 h-full w-[20px] z-[60] group hover:w-[60px] transition-all pointer-events-auto ${isMobileSideNavOpen ? 'is-mobile-open' : ''}`}>
-        <aside className={`side-nav-panel absolute left-0 top-0 w-[60px] h-full border-r border-white/5 flex flex-col items-center py-6 pointer-events-auto ${isMobileSideNavOpen ? 'translate-x-0' : '-translate-x-full'} group-hover:translate-x-0 transition-transform duration-300`} style={{ background: 'rgba(2,4,10,0.8)' }}>
-          <button onClick={closeFloatingPanels} className="uppercase tracking-[0.2em] text-[10px] mb-12 opacity-100 transition-opacity cursor-pointer" style={{ writingMode: 'vertical-rl', color: accentHex }}>Visualizer</button>
+      <div
+        className={`side-nav-trigger absolute left-0 top-0 h-full z-[60] transition-all pointer-events-auto ${isMobileSideNavOpen ? 'is-mobile-open' : ''}`}
+        onMouseEnter={() => setIsMobileSideNavOpen(true)}
+      >
+        <aside className={`side-nav-panel absolute left-0 top-0 h-full border-r border-white/5 flex flex-col pointer-events-auto ${isMobileSideNavOpen ? 'translate-x-0' : '-translate-x-full'} transition-transform duration-300`} style={{ background: 'rgba(2,4,10,0.8)' }}>
+          <button onClick={closeFloatingPanels} className="uppercase tracking-[0.2em] text-[10px] mb-12 opacity-100 transition-opacity cursor-pointer" style={{ writingMode: 'vertical-rl', color: accentHex }}>可视化</button>
           <button onClick={openOptionsPanel} className="uppercase tracking-[0.2em] text-[10px] mb-12 opacity-40 hover:opacity-100 transition-opacity cursor-pointer flex items-center justify-center gap-2" style={{ writingMode: 'vertical-rl' }}>
             设置
           </button>
           <button onClick={openSearchPanel} className="uppercase tracking-[0.2em] text-[10px] mb-12 opacity-40 hover:opacity-100 transition-opacity cursor-pointer flex items-center justify-center gap-2" style={{ writingMode: 'vertical-rl' }}>
-            Search
+            搜索
           </button>
           {isNeteaseCookieValid && (
             <button
@@ -814,7 +851,7 @@ export function UI({ theme, resolvedTheme, customThemes, activeCustomThemeId, th
             </button>
           )}
           <button onClick={openPlaylistPanel} className="uppercase tracking-[0.2em] text-[10px] mb-12 opacity-40 hover:opacity-100 transition-opacity cursor-pointer flex items-center justify-center gap-2" style={{ writingMode: 'vertical-rl' }}>
-            Playlist
+            歌单
           </button>
           
           <div className="side-nav-bottom mt-auto flex flex-col items-center gap-10">
@@ -823,21 +860,23 @@ export function UI({ theme, resolvedTheme, customThemes, activeCustomThemeId, th
               className="uppercase tracking-[0.2em] text-[10px] opacity-40 hover:opacity-100 transition-opacity cursor-pointer font-bold"
               style={{ writingMode: 'vertical-rl' }}
             >
-              Demo
+              示例
             </button>
             <button 
               onClick={() => { fileInputRef.current?.click(); setIsMobileSideNavOpen(false); }}
               className="uppercase tracking-[0.2em] text-[10px] opacity-40 hover:opacity-100 transition-opacity cursor-pointer"
               style={{ writingMode: 'vertical-rl' }}
             >
-              Upload
+              上传
             </button>
             <button 
               onClick={() => {
                 if (engine.isCapturing) {
                   engine.stopCapture();
                   setTrackName('No track selected');
+                  setLyricsText('');
                 } else {
+                  setLyricsText('');
                   engine.startCapture().then(() => {
                       if (engine.isCapturing) setTrackName('System Audio Capture');
                   });
@@ -847,7 +886,14 @@ export function UI({ theme, resolvedTheme, customThemes, activeCustomThemeId, th
               className={`uppercase tracking-[0.2em] text-[10px] transition-opacity cursor-pointer ${isCapturing ? 'opacity-100 text-[#ef4444]' : 'opacity-40 hover:opacity-100'}`}
               style={{ writingMode: 'vertical-rl' }}
             >
-              {isCapturing ? 'Stop' : 'Capture'}
+              {isCapturing ? '停止' : '采集'}
+            </button>
+            <button
+              onClick={toggleFullscreen}
+              className={`uppercase tracking-[0.2em] text-[10px] transition-opacity cursor-pointer ${isFullscreen ? 'opacity-100' : 'opacity-40 hover:opacity-100'}`}
+              style={{ writingMode: 'vertical-rl' }}
+            >
+              {isFullscreen ? '退出' : '全屏'}
             </button>
           </div>
           <input 
@@ -864,17 +910,14 @@ export function UI({ theme, resolvedTheme, customThemes, activeCustomThemeId, th
       {/* Brand Mark */}
       <button
         type="button"
-        className="mobile-side-nav-toggle pointer-events-auto"
-        aria-label={isMobileSideNavOpen ? 'Close menu' : 'Open menu'}
+        className="brand-mark absolute top-[38px] left-[56px] font-black text-[24px] leading-[40px] tracking-[-1px] text-white z-50 select-none pointer-events-auto cursor-pointer transition-opacity hover:opacity-80"
+        aria-label={isMobileSideNavOpen ? '关闭侧边栏' : '打开侧边栏'}
         aria-expanded={isMobileSideNavOpen}
         onClick={() => setIsMobileSideNavOpen((open) => !open)}
         style={{ color: isMobileSideNavOpen ? accentHex : undefined }}
       >
-        {isMobileSideNavOpen ? <X size={16} /> : <Menu size={16} />}
-      </button>
-      <div className="absolute top-[40px] left-[100px] font-black text-[24px] tracking-[-1px] text-white z-50 select-none">
         AJIN.
-      </div>
+      </button>
 
       {/* Player Panel */}
       {showSearchPanel && (
@@ -1260,7 +1303,7 @@ export function UI({ theme, resolvedTheme, customThemes, activeCustomThemeId, th
       )}
 
       {/* Lyrics Display */}
-      {trackName !== 'No track selected' && lyricsText && (
+      {trackName !== 'No track selected' && !isCapturing && lyricsText && (
         <LyricsDisplay lrcText={lyricsText} currentTime={currentTime} accentHex={accentHex} isPlaying={isPlaying} />
       )}
 
