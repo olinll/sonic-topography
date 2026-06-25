@@ -2,13 +2,6 @@ name = "sonic-topography"
 main = "worker/index.ts"
 compatibility_date = "2025-05-01"
 
-# Mount Worker at /music/* on tools.olinl.com (zone must be on Cloudflare).
-# The two patterns cover both /music (exact) and /music/anything.
-routes = [
-  { pattern = "tools.olinl.com/music", zone_name = "338233.xyz" },
-  { pattern = "tools.olinl.com/music/*", zone_name = "338233.xyz" },
-]
-
 # Static SPA assets served from the Vite build output.
 # not_found_handling = "single-page-application" makes deep links fall back
 # to index.html, which the Worker forwards to via env.ASSETS.
