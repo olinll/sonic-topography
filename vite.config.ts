@@ -549,8 +549,16 @@ function neteaseApiPlugin() {
   };
 }
 
-export default defineConfig(() => {
+export default defineConfig(({ mode }) => {
+  // When deploying under a sub-path (e.g. https://tools.olinl.com/music/),
+  // emit asset URLs prefixed with that base path so the browser resolves
+  // them against the mounted location rather than the zone root.
+  // Dev keeps '/' so `npm run dev` works at http://127.0.0.1:3000/.
+  // Override with SONIC_BASE_PATH=/some/path/ if needed.
+  const base = process.env.SONIC_BASE_PATH ?? (mode === 'production' ? '/music/' : '/');
+
   return {
+    base,
     plugins: [react(), tailwindcss(), neteaseApiPlugin()],
     resolve: {
       alias: {

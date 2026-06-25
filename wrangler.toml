@@ -1,0 +1,35 @@
+name = "sonic-topography"
+main = "worker/index.ts"
+compatibility_date = "2025-05-01"
+
+# Mount Worker at /music/* on tools.olinl.com (zone must be on Cloudflare).
+# The two patterns cover both /music (exact) and /music/anything.
+routes = [
+  { pattern = "tools.olinl.com/music", zone_name = "338233.xyz" },
+  { pattern = "tools.olinl.com/music/*", zone_name = "338233.xyz" },
+]
+
+# Static SPA assets served from the Vite build output.
+# not_found_handling = "single-page-application" makes deep links fall back
+# to index.html, which the Worker forwards to via env.ASSETS.
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+# KV for persisting playlists and the server-side Netease cookie.
+# Create with:
+#   wrangler kv:namespace create SONIC_KV
+#   wrangler kv:namespace create SONIC_KV --preview
+# then paste the returned ids below.
+[[kv_namespaces]]
+binding = "SONIC_KV"
+id = "REPLACE_WITH_PROD_KV_ID"
+preview_id = "REPLACE_WITH_PREVIEW_KV_ID"
+
+[vars]
+NETEASE_REFERER = "https://music.163.com/"
+NETEASE_USER_AGENT = "Mozilla/5.0"
+
+[observability]
+enabled = true

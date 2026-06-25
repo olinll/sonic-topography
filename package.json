@@ -6,13 +6,17 @@
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
     "build": "vite build",
+    "build:cf": "cross-env SONIC_BASE_PATH=/music/ vite build",
     "build:go-embed": "node scripts/prepare-go-embed.mjs",
     "build:go-exe": "npm run build && npm run build:go-embed && go build -o SonicTopography.exe ./cmd/sonic-topography",
     "build:wallpaper": "vite build --base ./ --outDir dist-wallpaper --emptyOutDir false && node scripts/prepare-wallpaper.mjs",
     "start": "node local-server.mjs",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "cf:dev": "wrangler dev",
+    "cf:deploy": "npm run build:cf && wrangler deploy",
+    "cf:tail": "wrangler tail"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -40,10 +44,12 @@
     "@types/node": "^22.14.0",
     "@types/three": "^0.184.1",
     "autoprefixer": "^10.4.21",
+    "cross-env": "^7.0.3",
     "esbuild": "^0.25.0",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.3"
+    "vite": "^6.2.3",
+    "wrangler": "^3.99.0"
   }
 }
