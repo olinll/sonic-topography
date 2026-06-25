@@ -10,7 +10,7 @@ export default {
 
     // API routes — handled by the Worker regardless of asset matches.
     if (path === '/api/playlists' || path === '/api/playlists/') {
-      return handlePlaylists(request, env);
+      return handlePlaylists(request);
     }
     if (path.startsWith('/api/netease/')) {
       return handleNetease(request, env, path);

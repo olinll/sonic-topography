@@ -10,31 +10,12 @@ import type { Env, NeteaseAccount, NeteaseSong } from './types';
 
 // ---------- Config & per-isolate caches ----------
 
-const COOKIE_KEY = 'netease-cookie:v1';
 const PLAYABLE_TTL_MS = 1000 * 60 * 10; // 10 minutes
 const SEARCH_TTL_MS = 1000 * 60 * 5; // 5 minutes
 
-// Per-isolate caches; cleared when the user updates the cookie.
+// Per-isolate caches; cleared on cookie changes within this isolate.
 const playableUrlCache = new TTLCache<string | null>(PLAYABLE_TTL_MS);
 const searchCache = new TTLCache<{ songs: NeteaseSong[]; rawCount: number; filteredCount: number }>(SEARCH_TTL_MS);
-
-// ---------- Cookie helpers ----------
-
-async function getStoredCookie(env: Env): Promise<string> {
-  try {
-    return (await env.SONIC_KV.get(COOKIE_KEY)) || '';
-  } catch {
-    return '';
-  }
-}
-
-async function setStoredCookie(env: Env, cookie: string): Promise<void> {
-  if (cookie) {
-    await env.SONIC_KV.put(COOKIE_KEY, cookie);
-  } else {
-    await env.SONIC_KV.delete(COOKIE_KEY);
-  }
-}
 
 // ---------- Netease upstream helpers ----------
 
@@ -255,7 +236,7 @@ async function getUserPlaylists(cookie: string, env: Env) {
     return { valid: false, playlists: [] };
   }
   const response = await fetch(
-    `https://music.163.com/api/user/playlist?uid=${encodeURIComponent(account.userId)}&limit=100&offset=0`,
+    `https://music.163.com/api/user/playlist?uid=${encodeURIComponent(String(account.userId))}&limit=100&offset=0`,
     { headers: createNeteaseHeaders(env, cookie) },
   );
   const data = (await response.json()) as any;
@@ -283,27 +264,25 @@ async function getPlaylistPlayableSongs(
 }
 
 // ---------- Cookie endpoints ----------
+// Without server-side storage, the cookie only lives in the browser's
+// localStorage and travels with every request via the x-netease-cookie
+// header. The endpoints below only validate and surface account info.
 
-async function handleCookieGet(env: Env): Promise<Response> {
-  try {
-    const stored = await getStoredCookie(env);
-    const account = await getNeteaseAccount(stored, env);
-    return json({
-      hasCookie: Boolean(stored),
-      valid: account.valid,
-      userId: account.userId,
-      nickname: account.nickname,
-    });
-  } catch {
-    return err('Unable to check Netease cookie', 500);
-  }
+function handleCookieGet(): Response {
+  // No stored cookie on the server; the frontend should send its own.
+  return json({
+    hasCookie: false,
+    valid: false,
+    userId: null,
+    nickname: '',
+  });
 }
 
 async function handleCookiePut(request: Request, env: Env): Promise<Response> {
   try {
     const body = (await request.json()) as { cookie?: string };
     const cookie = normalizeNeteaseCookie(body?.cookie);
-    await setStoredCookie(env, cookie);
+    // Invalidate caches when cookie changes within this isolate.
     playableUrlCache.clear();
     searchCache.clear();
     const account = await getNeteaseAccount(cookie, env);
@@ -314,27 +293,27 @@ async function handleCookiePut(request: Request, env: Env): Promise<Response> {
       nickname: account.nickname,
     });
   } catch {
-    return err('Unable to save Netease cookie', 500);
+    return err('Unable to validate Netease cookie', 500);
   }
 }
 
 function handleCookie(request: Request, env: Env): Promise<Response> {
   const method = request.method.toUpperCase();
-  if (method === 'GET') return handleCookieGet(env);
+  if (method === 'GET') return Promise.resolve(handleCookieGet());
   if (method === 'PUT') return handleCookiePut(request, env);
   return Promise.resolve(err('Method not allowed', 405));
 }
 
 // ---------- Search ----------
 
-async function handleSearch(url: URL, request: Request, env: Env, storedCookie: string): Promise<Response> {
+async function handleSearch(url: URL, request: Request, env: Env): Promise<Response> {
   const keywords = String(url.searchParams.get('keywords') || '').trim();
   const requestedLimit = Number(url.searchParams.get('limit') || '30');
   const includeDebug = url.searchParams.get('debug') === '1';
 
   if (!keywords) return err('Missing keywords', 400);
 
-  const cookie = readRequestCookie(request, storedCookie);
+  const cookie = readRequestCookie(request, '');
   const normalizedCookie = normalizeNeteaseCookie(cookie);
   const hasCookie = Boolean(normalizedCookie);
   const resultLimit = hasCookie
@@ -365,12 +344,12 @@ async function handleSearch(url: URL, request: Request, env: Env, storedCookie: 
 
 // ---------- Liked / playlists / playlist / daily-recommend ----------
 
-async function handleLiked(url: URL, request: Request, env: Env, storedCookie: string): Promise<Response> {
+async function handleLiked(url: URL, request: Request, env: Env): Promise<Response> {
   const requestedLimit = Number(url.searchParams.get('limit') || '50');
   const resultLimit = Number.isFinite(requestedLimit)
     ? Math.max(1, Math.min(requestedLimit, 80))
     : 50;
-  const cookie = readRequestCookie(request, storedCookie);
+  const cookie = readRequestCookie(request, '');
   const userPlaylists = await getUserPlaylists(cookie, env);
 
   if (!userPlaylists.valid || userPlaylists.playlists.length === 0) {
@@ -387,8 +366,8 @@ async function handleLiked(url: URL, request: Request, env: Env, storedCookie: s
   return json({ songs, playlist: likedPlaylist });
 }
 
-async function handleUserPlaylists(request: Request, env: Env, storedCookie: string): Promise<Response> {
-  const cookie = readRequestCookie(request, storedCookie);
+async function handleUserPlaylists(request: Request, env: Env): Promise<Response> {
+  const cookie = readRequestCookie(request, '');
   const userPlaylists = await getUserPlaylists(cookie, env);
   if (!userPlaylists.valid) {
     return err('Netease cookie is invalid or expired', 401);
@@ -397,13 +376,13 @@ async function handleUserPlaylists(request: Request, env: Env, storedCookie: str
   return json({ playlists: userPlaylists.playlists.slice(1) });
 }
 
-async function handlePlaylist(url: URL, request: Request, env: Env, storedCookie: string): Promise<Response> {
+async function handlePlaylist(url: URL, request: Request, env: Env): Promise<Response> {
   const id = String(url.searchParams.get('id') || '');
   const requestedLimit = Number(url.searchParams.get('limit') || '50');
   const resultLimit = Number.isFinite(requestedLimit)
     ? Math.max(1, Math.min(requestedLimit, 80))
     : 50;
-  const cookie = readRequestCookie(request, storedCookie);
+  const cookie = readRequestCookie(request, '');
 
   if (!id) return err('Missing id', 400);
 
@@ -414,12 +393,12 @@ async function handlePlaylist(url: URL, request: Request, env: Env, storedCookie
   return json({ songs });
 }
 
-async function handleDailyRecommend(url: URL, request: Request, env: Env, storedCookie: string): Promise<Response> {
+async function handleDailyRecommend(url: URL, request: Request, env: Env): Promise<Response> {
   const requestedLimit = Number(url.searchParams.get('limit') || '30');
   const resultLimit = Number.isFinite(requestedLimit)
     ? Math.max(1, Math.min(requestedLimit, 50))
     : 30;
-  const cookie = readRequestCookie(request, storedCookie);
+  const cookie = readRequestCookie(request, '');
   const result = await getDailyRecommendSongs(cookie, resultLimit, env);
   if (!result.valid) return err('Netease cookie is invalid or expired', 401);
   return json({ songs: result.songs });
@@ -427,9 +406,9 @@ async function handleDailyRecommend(url: URL, request: Request, env: Env, stored
 
 // ---------- Lyric / URL ----------
 
-async function handleLyric(url: URL, request: Request, env: Env, storedCookie: string): Promise<Response> {
+async function handleLyric(url: URL, request: Request, env: Env): Promise<Response> {
   const id = String(url.searchParams.get('id') || '');
-  const cookie = readRequestCookie(request, storedCookie);
+  const cookie = readRequestCookie(request, '');
   if (!id) return err('Missing id', 400);
 
   const response = await fetch(
@@ -443,9 +422,9 @@ async function handleLyric(url: URL, request: Request, env: Env, storedCookie: s
   });
 }
 
-async function handleUrl(url: URL, request: Request, env: Env, storedCookie: string): Promise<Response> {
+async function handleUrl(url: URL, request: Request, env: Env): Promise<Response> {
   const id = String(url.searchParams.get('id') || '');
-  const cookie = readRequestCookie(request, storedCookie);
+  const cookie = readRequestCookie(request, '');
   if (!id) return err('Missing id', 400);
   const playableUrl = await getPlayableUrl(id, cookie, env);
   return json({ url: playableUrl });
@@ -453,9 +432,9 @@ async function handleUrl(url: URL, request: Request, env: Env, storedCookie: str
 
 // ---------- Audio proxy (streaming) ----------
 
-async function handleAudio(request: Request, url: URL, env: Env, storedCookie: string): Promise<Response> {
+async function handleAudio(request: Request, url: URL, env: Env): Promise<Response> {
   const id = String(url.searchParams.get('id') || '');
-  const cookie = readRequestCookie(request, storedCookie);
+  const cookie = readRequestCookie(request, '');
   if (!id) return err('Missing id', 400);
 
   const playableUrl = await getPlayableUrl(id, cookie, env);
@@ -491,27 +470,26 @@ export async function handleNetease(request: Request, env: Env, path: string): P
   // path looks like '/api/netease/cookie', '/api/netease/audio', etc.
   const sub = path.slice('/api/netease/'.length);
   const url = new URL(request.url);
-  const storedCookie = await getStoredCookie(env);
 
   switch (sub) {
     case 'cookie':
       return handleCookie(request, env);
     case 'search':
-      return handleSearch(url, request, env, storedCookie);
+      return handleSearch(url, request, env);
     case 'liked':
-      return handleLiked(url, request, env, storedCookie);
+      return handleLiked(url, request, env);
     case 'playlists':
-      return handleUserPlaylists(request, env, storedCookie);
+      return handleUserPlaylists(request, env);
     case 'playlist':
-      return handlePlaylist(url, request, env, storedCookie);
+      return handlePlaylist(url, request, env);
     case 'daily-recommend':
-      return handleDailyRecommend(url, request, env, storedCookie);
+      return handleDailyRecommend(url, request, env);
     case 'lyric':
-      return handleLyric(url, request, env, storedCookie);
+      return handleLyric(url, request, env);
     case 'url':
-      return handleUrl(url, request, env, storedCookie);
+      return handleUrl(url, request, env);
     case 'audio':
-      return handleAudio(request, url, env, storedCookie);
+      return handleAudio(request, url, env);
     default:
       return err('Not found', 404);
   }

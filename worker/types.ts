@@ -1,5 +1,10 @@
+// Minimal Fetcher shape so we don't have to depend on @cloudflare/workers-types.
+// Wrangler bundles the real one at deploy time; this just satisfies tsc locally.
+interface Fetcher {
+  fetch(input: Request | string | URL, init?: RequestInit): Promise<Response>;
+}
+
 export interface Env {
-  SONIC_KV: KVNamespace;
   ASSETS: Fetcher;
   NETEASE_REFERER?: string;
   NETEASE_USER_AGENT?: string;
